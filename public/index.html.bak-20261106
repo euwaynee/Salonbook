@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SalonBook – online booking for salons</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap narrow">
+  <div class="hero">
+    <h1>Bookings that pay their own deposit.</h1>
+    <p>Give your clients a booking link. They pick a time and send an MMG deposit; you confirm it and the appointment lands in your Google Calendar.</p>
+  </div>
+
+  <div class="card">
+    <div class="tabs" style="margin-top:0">
+      <button id="tab-in" class="on" type="button">Sign in</button>
+      <button id="tab-up" type="button">Register your salon</button>
+    </div>
+
+    <form id="form-in">
+      <label for="in-email">Email</label>
+      <input id="in-email" type="email" autocomplete="username" required>
+      <label for="in-pass">Password</label>
+      <input id="in-pass" type="password" autocomplete="current-password" required>
+      <div class="err" id="err-in" role="alert"></div>
+      <button type="submit" style="width:100%;margin-top:6px">Sign in</button>
+    </form>
+
+    <form id="form-up" class="hide">
+      <label for="up-salon">Salon name</label>
+      <input id="up-salon" required maxlength="80">
+      <label for="up-name">Your name</label>
+      <input id="up-name" autocomplete="name" required>
+      <label for="up-email">Email</label>
+      <input id="up-email" type="email" autocomplete="username" required>
+      <label for="up-pass">Password (8+ characters)</label>
+      <input id="up-pass" type="password" autocomplete="new-password" minlength="8" required>
+      <div id="code-wrap" class="hide">
+        <label for="up-code">Registration code</label>
+        <input id="up-code">
+      </div>
+      <div class="err" id="err-up" role="alert"></div>
+      <button type="submit" style="width:100%;margin-top:6px">Create my salon</button>
+    </form>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function show(which) {
+  $('form-in').classList.toggle('hide', which !== 'in');
+  $('form-up').classList.toggle('hide', which !== 'up');
+  $('tab-in').classList.toggle('on', which === 'in');
+  $('tab-up').classList.toggle('on', which === 'up');
+}
+$('tab-in').onclick = () => show('in');
+$('tab-up').onclick = () => show('up');
+if (location.hash === '#register') show('up');
+
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'Something went wrong.');
+  return d;
+}
+// If already signed in, go straight to the dashboard.
+fetch('/api/admin/me').then((r) => { if (r.ok) location.replace('/admin.html'); });
+
+$('form-in').onsubmit = async (e) => {
+  e.preventDefault(); $('err-in').textContent = '';
+  try { await post('/api/auth/login', { email: $('in-email').value, password: $('in-pass').value }); location.href = '/admin.html'; }
+  catch (x) { $('err-in').textContent = x.message; }
+};
+$('form-up').onsubmit = async (e) => {
+  e.preventDefault(); $('err-up').textContent = '';
+  try {
+    await post('/api/auth/register', { salonName: $('up-salon').value, name: $('up-name').value, email: $('up-email').value, password: $('up-pass').value, code: $('up-code').value });
+    location.href = '/admin.html?welcome=1';
+  } catch (x) {
+    $('err-up').textContent = x.message;
+    if (/registration code/i.test(x.message)) $('code-wrap').classList.remove('hide');
+  }
+};
+</script>
+</body>
+</html>

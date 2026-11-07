@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book an appointment</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top"><div class="wrap"><div style="display:flex;align-items:center;gap:10px;min-width:0"><img id="logo" class="hide" alt="" style="height:38px;width:38px;border-radius:9px;object-fit:cover;background:#fff;flex:0 0 auto"><h1 id="salon-name">Book an appointment</h1></div></div></header>
+<div class="wrap narrow">
+  <div id="loading" class="muted">Loading…</div>
+  <div id="notfound" class="card hide"><h2>Salon not found</h2><p class="muted">Please check the link you were given.</p></div>
+
+  <!-- BOOKING FLOW -->
+  <div id="flow" class="hide">
+    <p class="muted" id="salon-info"></p>
+    <div class="steps"><span class="on" id="st1">1 Service</span><span id="st2">2 Time</span><span id="st3">3 Your details</span></div>
+
+    <div class="card" id="step-service">
+      <h2>Choose a service</h2>
+      <div id="svc-list"></div>
+    </div>
+
+    <div class="card hide" id="step-time">
+      <h2>Pick a day and time</h2>
+      <label for="date">Date</label>
+      <input id="date" type="date">
+      <div id="slots" class="chips" style="margin-top:12px"></div>
+      <div class="muted" id="slot-msg"></div>
+    </div>
+
+    <form class="card hide" id="step-details">
+      <h2>Your details</h2>
+      <div class="muted" id="summary"></div>
+      <label for="c-name">Full name</label><input id="c-name" autocomplete="name" required maxlength="80">
+      <label for="c-phone">Phone / WhatsApp</label><input id="c-phone" type="tel" autocomplete="tel" required maxlength="30">
+      <label for="c-email">Email <span class="muted">(optional)</span></label><input id="c-email" type="email" autocomplete="email" maxlength="120">
+      <label for="c-notes">Anything we should know? <span class="muted">(optional)</span></label><textarea id="c-notes" rows="2" maxlength="300"></textarea>
+      <div class="err" id="err-book" role="alert"></div>
+      <button type="submit" style="width:100%;margin-top:6px" id="book-btn">Continue to deposit</button>
+    </form>
+  </div>
+
+  <!-- PAYMENT / STATUS -->
+  <div id="status" class="hide"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => 'GYD ' + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+const slug = decodeURIComponent(location.pathname.split('/')[2] || '');
+const API = `/api/public/${encodeURIComponent(slug)}`;
+let SALON, SERVICES = [], today, sel = { service: null, date: '', time: '' };
+
+const fmtTime = (t) => { const [h, m] = t.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+const fmtDate = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+
+async function call(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'Something went wrong.');
+  return d;
+}
+function setStep(n) {
+  [1, 2, 3].forEach((i) => $('st' + i).classList.toggle('on', i <= n));
+  $('step-time').classList.toggle('hide', n < 2);
+  $('step-details').classList.toggle('hide', n < 3);
+}
+
+// ---------- branding ----------
+function applyBrand(s) {
+  let [r, g, b] = [1, 3, 5].map((i) => parseInt((s.brandColor || '#6b2d57').slice(i, i + 2), 16));
+  // Header text is white, so darken pale colours until they stay readable.
+  for (let n = 0; n < 30 && (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5; n++) { r *= 0.92; g *= 0.92; b *= 0.92; }
+  const hex = (r, g, b) => '#' + [r, g, b].map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+  const root = document.documentElement.style;
+  root.setProperty('--brand', hex(r, g, b)); root.setProperty('--brand-dark', hex(r * 0.75, g * 0.75, b * 0.75));
+  if (s.logo) { $('logo').src = s.logo; $('logo').classList.remove('hide'); }
+}
+
+// ---------- booking flow ----------
+function renderServices() {
+  $('svc-list').innerHTML = SERVICES.length ? SERVICES.map((s) => `
+    <button type="button" class="svc ${sel.service?.id === s.id ? 'on' : ''}" data-id="${s.id}">
+      <span>${esc(s.name)}<small>${s.duration_min} min</small></span>
+      <span style="text-align:right"><b>${money(s.price)}</b><small>deposit ${money(s.deposit)}</small></span>
+    </button>`).join('') : '<p class="muted">This salon has not added any services yet.</p>';
+}
+$('svc-list').onclick = (e) => {
+  const b = e.target.closest('.svc'); if (!b) return;
+  sel.service = SERVICES.find((s) => s.id === Number(b.dataset.id)); sel.time = '';
+  renderServices(); setStep(2); loadSlots();
+  $('step-time').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+$('date').onchange = () => { sel.date = $('date').value; sel.time = ''; setStep(2); loadSlots(); };
+
+async function loadSlots() {
+  if (!sel.service || !sel.date) { $('slots').innerHTML = ''; $('slot-msg').textContent = 'Choose a date to see available times.'; return; }
+  $('slots').innerHTML = ''; $('slot-msg').textContent = 'Checking availability…';
+  try {
+    const { slots } = await call('GET', `${API}/slots?service=${sel.service.id}&date=${sel.date}`);
+    $('slot-msg').textContent = slots.length ? '' : 'No times available that day — please try another date.';
+    $('slots').innerHTML = slots.map((t) => `<button type="button" class="chip ${sel.time === t ? 'on' : ''}" data-t="${t}">${fmtTime(t)}</button>`).join('');
+  } catch (x) { $('slot-msg').textContent = x.message; }
+}
+$('slots').onclick = (e) => {
+  const b = e.target.closest('.chip'); if (!b) return;
+  sel.time = b.dataset.t;
+  $('slots').querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c === b));
+  $('summary').innerHTML = `<b>${esc(sel.service.name)}</b> · ${esc(fmtDate(sel.date))} at ${fmtTime(sel.time)}<br>Deposit to secure: <b>${money(sel.service.deposit)}</b>`;
+  setStep(3);
+  $('step-details').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
+$('step-details').onsubmit = async (e) => {
+  e.preventDefault(); $('err-book').textContent = ''; $('book-btn').disabled = true;
+  try {
+    const r = await call('POST', `${API}/book`, {
+      serviceId: sel.service.id, date: sel.date, time: sel.time,
+      name: $('c-name').value, phone: $('c-phone').value, email: $('c-email').value, notes: $('c-notes').value,
+    });
+    history.replaceState(null, '', `${location.pathname}?code=${r.code}`);
+    showStatus(r.code);
+  } catch (x) {
+    $('err-book').textContent = x.message; $('book-btn').disabled = false;
+    if (/just taken/i.test(x.message)) { sel.time = ''; setStep(2); loadSlots(); }
+  }
+};
+
+// ---------- payment + status ----------
+let poll;
+async function showStatus(code) {
+  $('flow').classList.add('hide'); $('status').classList.remove('hide'); clearTimeout(poll);
+  let d;
+  try { d = await call('GET', `${API}/appointments/${encodeURIComponent(code)}`); }
+  catch (x) { $('status').innerHTML = `<div class="card"><h2>Booking not found</h2><p class="muted">${esc(x.message)}</p><a href="${location.pathname}">Start a new booking</a></div>`; return; }
+  const a = d.appointment, m = d.salon.mmg;
+  const when = `${esc(fmtDate(a.start.slice(0, 10)))} at ${fmtTime(a.start.slice(11))}`;
+  const head = `<div class="card"><h2>${esc(a.service)}</h2><div>${when}</div><div class="muted">Booking code <span class="code">${esc(a.code)}</span></div></div>`;
+  let body = '';
+
+  if (a.status === 'pending_payment') {
+    body = `<div class="card"><h2>Send your deposit to secure it</h2>
+      <p>Your time is held for <b>${d.salon.holdMinutes} minutes</b> from booking. Please pay the deposit through MMG:</p>
+      <div class="pay">
+        <div class="big">${money(a.deposit)}</div>
+        <div>MMG number: <b>${esc(m.number || 'ask the salon')}</b></div>
+        ${m.name ? `<div>Account name: <b>${esc(m.name)}</b></div>` : ''}
+        <div>Add this as the note/reference: <span class="code">${esc(a.code)}</span></div>
+      </div>
+      <p class="muted">Balance of ${money(a.price - a.deposit)} is paid at the salon.</p>
+      <form id="pay-form">
+        <label for="ref">After paying, enter the MMG transaction ID from your receipt</label>
+        <input id="ref" required minlength="4" maxlength="60" autocomplete="off">
+        <div class="err" id="err-pay" role="alert"></div>
+        <button type="submit" style="width:100%;margin-top:6px">I've paid</button>
+      </form></div>`;
+  } else if (a.status === 'payment_submitted') {
+    body = `<div class="card"><h2>Thanks — payment reported</h2>
+      <p>The salon will check the deposit and confirm your appointment. Keep this page or your code <b>${esc(a.code)}</b>; this page updates automatically.</p></div>`;
+  } else if (a.status === 'confirmed') {
+    body = `<div class="card"><h2 class="ok-msg">You're booked! ✓</h2>
+      <p>See you ${when}.</p>
+      ${d.salon.address ? `<p class="muted">${esc(d.salon.address)}</p>` : ''}
+      ${d.salon.phone ? `<p class="muted">Need to change something? Contact the salon: ${esc(d.salon.phone)}</p>` : ''}</div>`;
+  } else {
+    body = `<div class="card"><h2>${a.status === 'expired' ? 'This booking expired' : 'This booking was cancelled'}</h2>
+      <p class="muted">${a.status === 'expired' ? 'The deposit was not reported in time, so the slot was released.' : 'If this is unexpected, please contact the salon.'}</p>
+      <a class="btn" href="${location.pathname}">Book again</a></div>`;
+  }
+  $('status').innerHTML = head + body;
+
+  const pf = $('pay-form');
+  if (pf) pf.onsubmit = async (e) => {
+    e.preventDefault(); $('err-pay').textContent = '';
+    try { await call('POST', `${API}/appointments/${encodeURIComponent(code)}/payment`, { reference: $('ref').value }); showStatus(code); }
+    catch (x) { $('err-pay').textContent = x.message; }
+  };
+  // Refresh status every 20s (skipped while the client is typing their transaction ID).
+  if (['pending_payment', 'payment_submitted'].includes(a.status)) {
+    const tick = () => { if (document.activeElement?.id === 'ref') poll = setTimeout(tick, 20000); else showStatus(code); };
+    poll = setTimeout(tick, 20000);
+  }
+}
+
+// ---------- boot ----------
+(async () => {
+  try {
+    const d = await call('GET', API);
+    SALON = d.salon; SERVICES = d.services; today = d.today;
+    document.title = `Book at ${SALON.name}`;
+    applyBrand(SALON);
+    $('salon-name').textContent = SALON.name;
+    $('salon-info').textContent = [SALON.address, SALON.phone].filter(Boolean).join(' · ');
+    $('date').min = today;
+    $('loading').classList.add('hide');
+    const code = new URLSearchParams(location.search).get('code');
+    if (code) return showStatus(code);
+    $('flow').classList.remove('hide'); renderServices();
+  } catch { $('loading').classList.add('hide'); $('notfound').classList.remove('hide'); }
+})();
+</script>
+</body>
+</html>

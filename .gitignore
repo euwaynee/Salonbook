@@ -1,0 +1,8 @@
+node_modules
+*.db
+*.db-*
+.session_secret
+.env
+.hallmark/before/
+.hallmark/*.json
+.hallmark/*.txt
