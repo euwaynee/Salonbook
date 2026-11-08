@@ -27,7 +27,7 @@ Set `REGISTRATION_CODE` in `.env` if you don't want strangers creating salons on
 4. On confirm, the appointment is added to the owner's Google Calendar. Cancelling removes it.
 5. If no payment is reported before the hold runs out, the slot is released automatically.
 
-> **MMG note:** MMG has no public payment API that this app can use, so the owner verifies each deposit manually. That is deliberate — nothing is marked paid without the owner's tap. If you get MMG merchant API access later, the place to plug it in is the `/payment` and `/confirm` routes in `server.js`.
+> **MMG note:** Without MMG merchant checkout set up, the owner verifies each deposit manually, and nothing is marked paid without the owner's tap. With it set up (see *MMG online checkout* below), MMG's own result confirms the booking.
 
 ## Branding and QR code
 
@@ -56,6 +56,24 @@ Google requires **HTTPS** redirect URIs except for `localhost`, so a public depl
 - **Times** are stored as local wall-clock time in the salon's timezone (default `America/Guyana`).
 - Passwords are bcrypt-hashed; sessions are signed HttpOnly cookies; booking/login endpoints are rate-limited.
 
+## MMG online checkout (optional)
+
+If a salon has an **MMG merchant account**, clients can pay the deposit on MMG's own payment page and the booking confirms itself. No owner tap is needed.
+
+1. Apply for MMG e-commerce / Merchant Checkout access ([mmg.gy/developer](https://mmg.gy/developer/)). MMG gives you a **Merchant ID**, **Client ID**, **Secret Key** and RSA key pair(s).
+2. Give MMG your **Response URL**: `BASE_URL/api/mmg/return/<your-salon>` (shown under Settings → MMG online payments). It must be a public HTTPS address in live mode.
+3. Settings → **MMG online payments**: paste the IDs, secret key, MMG's public key and your private key. Start in **Sandbox**, make a test booking, then switch to **Live**.
+
+How it works: the payment request is encrypted with MMG's public key (RSA-OAEP, SHA-256 by default) and the client is redirected to MMG. MMG redirects back with an encrypted result, which is decrypted with your private key. Result code `0` confirms the booking, adds it to Google Calendar and emails the owners. If the client pays after the hold expired and the slot has been taken, the booking is left as "Payment reported" and the owners are emailed to sort it out.
+
+The manual flow (client sends to your MMG number and types the transaction ID) stays available as a fallback.
+
+> Built from MMG's published Merchant Checkout docs plus a community WooCommerce plugin. MMG's docs don't state the RSA padding. If the sandbox returns "Token Decryption Failed", set `MMG_OAEP_HASH=sha1` in `.env` and restart.
+
+## Email notifications
+
+Owners get an email when a client books, reports a manual MMG payment, or pays through MMG checkout. Configure SMTP in `.env` (see `.env.example`; for Gmail use an App Password). Each owner can turn their own emails on or off, and send a test, under Settings → Notifications. Notification channels live in `notify.js`, so WhatsApp/SMS can be added there later.
+
 ## Not included (ideas for next)
 
-SMS/WhatsApp reminders, per-stylist calendars, client self-cancel/reschedule, password reset by email, deposit refunds.
+SMS/WhatsApp notifications, client emails, per-stylist calendars, client self-cancel/reschedule, password reset by email, deposit refunds.

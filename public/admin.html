@@ -150,6 +150,38 @@
       <div class="save-bar"><button type="submit">Save settings</button> <span id="saved" class="ok-msg"></span></div>
     </form>
 
+    <form class="set" id="mmg-form">
+      <header>
+        <h3>MMG online payments</h3>
+        <p class="muted">With an MMG merchant account, clients pay the deposit on MMG’s own page and the booking confirms itself. Without it, the manual “send to my MMG number” flow above is used.</p>
+      </header>
+      <div>
+        <label class="check"><input type="checkbox" id="m-on"> Take deposits through MMG checkout</label>
+        <div class="row">
+          <div><label for="m-mode">Mode</label>
+            <select id="m-mode"><option value="sandbox">Sandbox (testing)</option><option value="live">Live (real money)</option></select></div>
+          <div><label for="m-mid">Merchant ID <span class="muted">(merchant MMG number)</span></label><input id="m-mid" inputmode="numeric" maxlength="15" autocomplete="off"></div>
+          <div><label for="m-cid">Client ID</label><input id="m-cid" maxlength="120" autocomplete="off"></div>
+        </div>
+        <label for="m-secret">Secret key</label><input id="m-secret" type="password" maxlength="200" autocomplete="new-password">
+        <label for="m-pub">MMG public key <span class="muted">(PEM, from MMG)</span></label>
+        <textarea id="m-pub" rows="3" spellcheck="false" placeholder="-----BEGIN PUBLIC KEY-----"></textarea>
+        <label for="m-priv">Your private key <span class="muted">(PEM, matches the public key you gave MMG)</span></label>
+        <textarea id="m-priv" rows="3" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+        <p class="muted">Give MMG this Response URL: <span class="code" id="m-return"></span></p>
+        <div class="err" id="err-mmg" role="alert"></div>
+        <div class="save-bar"><button type="submit">Save MMG settings</button> <span id="m-saved" class="ok-msg"></span></div>
+      </div>
+    </form>
+
+    <div class="set">
+      <header>
+        <h3>Notifications</h3>
+        <p class="muted">Email alerts for new bookings, reported payments and MMG payments. Each owner chooses for themselves.</p>
+      </header>
+      <div id="notify-box" class="muted">Loading…</div>
+    </div>
+
     <div class="set">
       <header><h3>Google Calendar</h3></header>
       <div id="google-box" class="muted">Loading…</div>
@@ -232,7 +264,7 @@ async function loadAppts() {
           <div><dt>Price</dt><dd>${money(a.price)}</dd></div>
           <div><dt>Deposit</dt><dd>${money(a.deposit)}</dd></div>
           <div><dt>Code</dt><dd><b>${esc(a.code)}</b></dd></div>
-          ${a.paymentRef ? `<div><dt>MMG transaction ID</dt><dd><b>${esc(a.paymentRef)}</b></dd></div>` : ''}
+          ${a.paymentRef ? `<div><dt>MMG transaction ID</dt><dd><b>${esc(a.paymentRef)}</b>${a.paidVia === 'mmg' ? ' <span class="muted">(verified by MMG)</span>' : ''}</dd></div>` : ''}
         </dl>
         ${a.notes ? `<p class="appt-note">Note: ${esc(a.notes)}</p>` : ''}
       </div>
@@ -361,6 +393,47 @@ $('print-poster').onclick = () => {
   w.document.close();
 };
 
+// ---------- MMG online payments ----------
+function fillMmg() {
+  const m = ME.mmgApi;
+  $('m-on').checked = m.enabled; $('m-mode').value = m.mode; $('m-mid').value = m.merchantId; $('m-cid').value = m.clientId;
+  $('m-secret').value = ''; $('m-pub').value = ''; $('m-priv').value = '';
+  $('m-secret').placeholder = m.hasSecretKey ? 'Saved (leave blank to keep)' : '';
+  $('m-pub').placeholder = m.hasPublicKey ? 'Saved (leave blank to keep)' : '-----BEGIN PUBLIC KEY-----';
+  $('m-priv').placeholder = m.hasPrivateKey ? 'Saved (leave blank to keep)' : '-----BEGIN PRIVATE KEY-----';
+  $('m-return').textContent = m.responseUrl;
+}
+$('mmg-form').onsubmit = async (e) => {
+  e.preventDefault(); $('err-mmg').textContent = ''; $('m-saved').textContent = '';
+  if ($('m-on').checked && $('m-mode').value === 'live' && !confirm('Live mode takes real money from clients. Continue?')) return;
+  try {
+    await api('PUT', '/api/admin/mmg', {
+      enabled: $('m-on').checked, mode: $('m-mode').value, merchantId: $('m-mid').value, clientId: $('m-cid').value,
+      secretKey: $('m-secret').value, publicKey: $('m-pub').value, privateKey: $('m-priv').value,
+    });
+    ME = await api('GET', '/api/admin/me'); fillMmg(); $('m-saved').textContent = 'Saved';
+  } catch (x) { $('err-mmg').textContent = x.message; }
+};
+
+// ---------- notifications ----------
+function renderNotify() {
+  const n = ME.notify, box = $('notify-box');
+  if (!n.emailAvailable) { box.innerHTML = 'Email is not set up on this server yet. The server admin needs to add SMTP settings to .env (see README).'; return; }
+  box.innerHTML = `<label class="check"><input type="checkbox" id="n-email" ${n.email ? 'checked' : ''}> Email me at <b>${esc(ME.owner.email)}</b></label>
+    <button type="button" class="ghost small" id="n-test">Send test email</button> <span id="n-msg" class="ok-msg"></span><div class="err" id="err-n"></div>`;
+  $('n-email').onchange = async (e) => {
+    $('err-n').textContent = '';
+    try { await api('PUT', '/api/admin/notify', { email: e.target.checked }); ME.notify.email = e.target.checked; }
+    catch (x) { $('err-n').textContent = x.message; e.target.checked = !e.target.checked; }
+  };
+  $('n-test').onclick = async (e) => {
+    $('err-n').textContent = ''; $('n-msg').textContent = ''; e.target.disabled = true;
+    try { await api('POST', '/api/admin/notify/test'); $('n-msg').textContent = 'Sent. Check your inbox.'; }
+    catch (x) { $('err-n').textContent = x.message; }
+    e.target.disabled = false;
+  };
+}
+
 function renderGoogle() {
   const g = ME.google, box = $('google-box');
   if (!g.available) box.innerHTML = 'Google sync is not set up on this server yet. The server admin needs to add Google credentials (see README). Bookings still work without it.';
@@ -382,7 +455,7 @@ $('owner-add').onsubmit = async (e) => {
 // ---------- boot ----------
 (async () => {
   ME = await api('GET', '/api/admin/me');
-  fillSettings(); renderGoogle();
+  fillSettings(); fillMmg(); renderNotify(); renderGoogle();
   const q = new URLSearchParams(location.search);
   if (q.get('welcome')) $('welcome').classList.remove('hide');
   const gmsg = { connected: 'Google Calendar connected.', error: 'Google connection failed. Please try again.', unconfigured: 'Google sync is not configured on this server.' }[q.get('google')];

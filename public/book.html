@@ -149,8 +149,35 @@ async function showStatus(code) {
   const head = `<div class="card ticket"><h2>${esc(a.service)}</h2><div>${when}</div><div class="muted">Booking code <span class="code">${esc(a.code)}</span></div></div>`;
   let body = '';
 
-  if (a.status === 'pending_payment') {
-    body = `<div class="card"><h2>Send your deposit to secure it</h2>
+  const flag = new URLSearchParams(location.search).get('mmg');
+  const flagMsg = {
+    cancelled: 'MMG payment was cancelled. You can try again below.',
+    failed: 'MMG could not complete the payment. You can try again or pay manually below.',
+    error: 'We couldn’t read the response from MMG. If money left your account, contact the salon with your booking code.',
+  }[flag];
+  const notice = flagMsg && a.status === 'pending_payment' ? `<p class="notice" role="status">${flagMsg}</p>` : '';
+
+  if (a.status === 'pending_payment' && m.checkout) {
+    body = `<div class="card"><h2>Pay your deposit to secure it</h2>${notice}
+      <p>Your time is held for <b>${d.salon.holdMinutes} minutes</b> from booking.</p>
+      <div class="pay"><div class="big">${money(a.deposit)}</div><div>Paid securely in MMG. Your booking confirms automatically.</div></div>
+      <div class="err" id="err-mmg" role="alert"></div>
+      <button type="button" id="mmg-pay">Pay with MMG</button>
+      <p class="muted">Balance of ${money(a.price - a.deposit)} is paid at the salon.</p>
+      <details><summary class="muted">Can’t use MMG checkout? Pay manually instead</summary>
+      <div class="pay">
+        <div>MMG number: <b>${esc(m.number || 'ask the salon')}</b></div>
+        ${m.name ? `<div>Account name: <b>${esc(m.name)}</b></div>` : ''}
+        <div>Add this as the note/reference: <span class="code">${esc(a.code)}</span></div>
+      </div>
+      <form id="pay-form">
+        <label for="ref">After paying, enter the MMG transaction ID from your receipt</label>
+        <input id="ref" required minlength="4" maxlength="60" autocomplete="off">
+        <div class="err" id="err-pay" role="alert"></div>
+        <button type="submit" class="ghost">I’ve paid</button>
+      </form></details></div>`;
+  } else if (a.status === 'pending_payment') {
+    body = `<div class="card"><h2>Send your deposit to secure it</h2>${notice}
       <p>Your time is held for <b>${d.salon.holdMinutes} minutes</b> from booking. Please pay the deposit through MMG:</p>
       <div class="pay">
         <div class="big">${money(a.deposit)}</div>
@@ -165,6 +192,9 @@ async function showStatus(code) {
         <div class="err" id="err-pay" role="alert"></div>
         <button type="submit">I’ve paid</button>
       </form></div>`;
+  } else if (a.status === 'payment_submitted' && flag === 'paid') {
+    body = `<div class="card"><h2>Payment received</h2>
+      <p>MMG confirmed your deposit, but your hold had run out and the time may no longer be free. The salon has been told and will contact you. Your booking code is <b>${esc(a.code)}</b>.</p></div>`;
   } else if (a.status === 'payment_submitted') {
     body = `<div class="card"><h2>Thanks, payment reported</h2>
       <p>The salon will check the deposit and confirm your appointment. Keep this page or your code <b>${esc(a.code)}</b>; this page updates automatically.</p></div>`;
@@ -180,6 +210,12 @@ async function showStatus(code) {
   }
   $('status').innerHTML = head + body;
 
+  const mp = $('mmg-pay');
+  if (mp) mp.onclick = async () => {
+    $('err-mmg').textContent = ''; mp.disabled = true; mp.textContent = 'Opening MMG…';
+    try { const r = await call('POST', `${API}/appointments/${encodeURIComponent(code)}/mmg-checkout`); location.href = r.url; }
+    catch (x) { $('err-mmg').textContent = x.message; mp.disabled = false; mp.textContent = 'Pay with MMG'; }
+  };
   const pf = $('pay-form');
   if (pf) pf.onsubmit = async (e) => {
     e.preventDefault(); $('err-pay').textContent = '';

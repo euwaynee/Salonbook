@@ -13,6 +13,8 @@ const fs = require('fs');
 const path = require('path');
 const db = require('./db');
 const google = require('./google');
+const mmg = require('./mmg');
+const { notify, emailEnabled } = require('./notify');
 
 const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -119,14 +121,14 @@ const publicSalon = (s) => ({
   slug: s.slug, name: s.name, phone: s.phone, address: s.address, timezone: s.timezone,
   brandColor: s.brand_color, logo: s.logo,
   hours: JSON.parse(s.hours), holdMinutes: s.hold_minutes,
-  mmg: { number: s.mmg_number, name: s.mmg_name },
+  mmg: { number: s.mmg_number, name: s.mmg_name, checkout: mmg.configured(s) },
 });
 const apptOut = (a) => ({
   id: a.id, code: a.code, service: a.service_name, price: a.price, deposit: a.deposit,
   clientName: a.client_name, clientPhone: a.client_phone, clientEmail: a.client_email, notes: a.notes,
   start: a.start_local, end: a.end_local, status: a.status,
   paymentRef: a.payment_ref, paymentSubmittedAt: a.payment_submitted_at, createdAt: a.created_at,
-  synced: Boolean(a.google_event_id),
+  synced: Boolean(a.google_event_id), paidVia: a.paid_via,
 });
 
 // ---------- auth ----------
@@ -212,10 +214,11 @@ app.post('/api/public/:slug/book', limit('book', 15, 3600e3), (req, res) => {
   const start = `${b.date}T${b.time}`;
   const code = crypto.randomBytes(4).toString('hex').slice(0, 6).toUpperCase();
   const deposit = depositFor(salon, service.price);
-  db.prepare(`INSERT INTO appointments
+  const id = db.prepare(`INSERT INTO appointments
     (code, salon_id, service_id, service_name, price, deposit, client_name, client_phone, client_email, notes, start_local, end_local)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(code, salon.id, service.id, service.name, service.price, deposit, name, phone, email, str(b.notes, 300), start, addMinutes(start, service.duration_min));
+    .run(code, salon.id, service.id, service.name, service.price, deposit, name, phone, email, str(b.notes, 300), start, addMinutes(start, service.duration_min)).lastInsertRowid;
+  notify('booked', salon, db.prepare('SELECT * FROM appointments WHERE id = ?').get(id));
   res.json({ code, deposit, holdMinutes: salon.hold_minutes, mmg: { number: salon.mmg_number, name: salon.mmg_name } });
 });
 
@@ -243,8 +246,84 @@ app.post('/api/public/:slug/appointments/:code/payment', limit('pay', 20, 3600e3
   const ref = str(req.body?.reference, 60);
   if (ref.length < 4) return bad(res, 'Please enter the MMG transaction ID from your receipt.');
   db.prepare(`UPDATE appointments SET status = 'payment_submitted', payment_ref = ?, payment_submitted_at = datetime('now') WHERE id = ?`).run(ref, a.id);
+  notify('payment_reported', salon, { ...a, payment_ref: ref });
   res.json({ ok: true });
 });
+
+// ---------- MMG online checkout ----------
+// Client taps "Pay with MMG": create a checkout attempt and hand back MMG's payment page URL.
+app.post('/api/public/:slug/appointments/:code/mmg-checkout', limit('mmg', 20, 3600e3), (req, res) => {
+  const salon = getSalonBySlug(req.params.slug);
+  if (!salon) return bad(res, 'Salon not found.', 404);
+  if (!mmg.configured(salon)) return bad(res, 'This salon does not take MMG online payments yet.', 409);
+  expireStaleHolds();
+  const a = db.prepare('SELECT * FROM appointments WHERE code = ? AND salon_id = ?').get(str(req.params.code, 12).toUpperCase(), salon.id);
+  if (!a) return bad(res, 'Booking not found.', 404);
+  if (a.status === 'expired') return bad(res, 'This booking expired before payment. Please book again.', 410);
+  if (a.status !== 'pending_payment') return bad(res, 'This booking is not waiting for payment.', 409);
+  // Short but unique per attempt: the whole request has to fit in one RSA block.
+  const txn = `${a.code}${Date.now().toString(36)}`.toUpperCase();
+  try {
+    const url = mmg.checkoutUrl(salon, { merchantTransactionId: txn, amount: a.deposit, description: `Deposit ${a.code}` });
+    db.prepare('INSERT INTO mmg_attempts (merchant_txn_id, appointment_id, amount) VALUES (?,?,?)').run(txn, a.id, a.deposit);
+    res.json({ url });
+  } catch (e) {
+    console.error('MMG checkout error', e.message);
+    bad(res, 'MMG payment could not be started. Please use the manual MMG option below.', 502);
+  }
+});
+
+// MMG sends the client back here (GET or POST) with an encrypted result token.
+const mmgReturn = async (req, res) => {
+  const salon = getSalonBySlug(req.params.slug);
+  if (!salon) return res.status(404).send('Salon not found.');
+  const back = (code, flag) => res.redirect(`/s/${encodeURIComponent(salon.slug)}?${code ? `code=${encodeURIComponent(code)}&` : ''}mmg=${flag}`);
+  const token = req.query.token || req.body?.token;
+  if (!token || !mmg.configured(salon)) return back('', 'error');
+  let r;
+  try { r = mmg.decodeResponse(salon, String(token)); }
+  catch (e) { console.error('MMG response decrypt failed', e.message); return back('', 'error'); }
+
+  const attempt = db.prepare(`SELECT t.*, a.code FROM mmg_attempts t JOIN appointments a ON a.id = t.appointment_id
+                              WHERE t.merchant_txn_id = ? AND a.salon_id = ?`).get(r.merchantTransactionId, salon.id);
+  if (!attempt) { console.error('MMG response for unknown transaction', r.merchantTransactionId); return back('', 'error'); }
+  if (attempt.result_code === '0') return back(attempt.code, 'paid'); // already processed (page refresh / repeat)
+
+  if (!r.ok) {
+    db.prepare('UPDATE mmg_attempts SET result_code = ? WHERE merchant_txn_id = ?').run(r.code, attempt.merchant_txn_id);
+    return back(attempt.code, r.code === '6' ? 'cancelled' : 'failed');
+  }
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(r.transactionId)) { console.error('MMG success without valid transactionId'); return back(attempt.code, 'error'); }
+  if (db.prepare('SELECT 1 FROM mmg_attempts WHERE mmg_txn_id = ?').get(r.transactionId)) return back(attempt.code, 'error');
+
+  // Record the payment and decide the booking's fate in one transaction.
+  const outcome = db.transaction(() => {
+    db.prepare('UPDATE mmg_attempts SET result_code = ?, mmg_txn_id = ? WHERE merchant_txn_id = ?').run('0', r.transactionId, attempt.merchant_txn_id);
+    const a = db.prepare('SELECT * FROM appointments WHERE id = ?').get(attempt.appointment_id);
+    let status = 'confirmed';
+    if (a.status === 'cancelled' || a.status === 'confirmed') status = a.status; // owner already acted; just record payment
+    else if (a.status === 'expired') {
+      // Paid after the hold ran out: only confirm if the slot is still free.
+      const clash = db.prepare(`SELECT COUNT(*) n FROM appointments WHERE salon_id = ? AND id != ?
+        AND status IN ('pending_payment','payment_submitted','confirmed') AND start_local < ? AND end_local > ?`)
+        .get(salon.id, a.id, a.end_local, a.start_local).n;
+      if (clash >= salon.capacity) status = 'payment_submitted';
+    }
+    db.prepare(`UPDATE appointments SET status = ?, payment_ref = ?, payment_submitted_at = datetime('now'), paid_via = 'mmg' WHERE id = ?`)
+      .run(status, r.transactionId, a.id);
+    return { before: a.status, after: status, appt: { ...a, status, payment_ref: r.transactionId } };
+  })();
+
+  if (outcome.after === 'confirmed' && outcome.before !== 'confirmed') {
+    notify('mmg_paid', salon, outcome.appt);
+    google.syncConfirmed(salon, outcome.appt).catch((e) => console.error('Google sync error', e.message));
+  } else if (outcome.after === 'payment_submitted' || outcome.after === 'cancelled') {
+    notify('mmg_paid_conflict', salon, outcome.appt);
+  }
+  back(attempt.code, 'paid');
+};
+app.get('/api/mmg/return/:slug', mmgReturn);
+app.post('/api/mmg/return/:slug', express.urlencoded({ extended: false, limit: '20kb' }), mmgReturn);
 
 // ---------- owner API ----------
 const admin = express.Router();
@@ -262,7 +341,51 @@ admin.get('/me', (req, res) => {
       brandColor: salon.brand_color, logo: salon.logo,
     },
     bookingUrl: `${BASE_URL}/s/${salon.slug}`,
+    // Secrets are never sent back to the browser, only whether they are set.
+    mmgApi: {
+      enabled: Boolean(salon.mmg_api_enabled), ready: mmg.configured(salon), mode: salon.mmg_mode,
+      merchantId: salon.mmg_merchant_id, clientId: salon.mmg_client_id,
+      hasSecretKey: Boolean(salon.mmg_secret_key), hasPublicKey: Boolean(salon.mmg_public_key), hasPrivateKey: Boolean(salon.mmg_private_key),
+      responseUrl: `${BASE_URL}/api/mmg/return/${salon.slug}`,
+    },
+    notify: { emailAvailable: emailEnabled(), email: Boolean(owner.notify_email) },
   });
+});
+
+// MMG Merchant Checkout credentials. Blank secret fields keep the stored value.
+admin.put('/mmg', (req, res) => {
+  const b = req.body || {}, s = req.salon;
+  const pub = b.publicKey ? String(b.publicKey).trim().slice(0, 10000) : s.mmg_public_key;
+  const priv = b.privateKey ? String(b.privateKey).trim().slice(0, 10000) : s.mmg_private_key;
+  const keyErr = mmg.checkKey(pub, 'public') || mmg.checkKey(priv, 'private');
+  if (keyErr) return bad(res, keyErr);
+  const merchantId = str(b.merchantId ?? s.mmg_merchant_id, 30);
+  if (merchantId && !/^\d{7,15}$/.test(merchantId)) return bad(res, 'Merchant ID should be the number on your MMG merchant account (digits only).');
+  const next = {
+    mmg_api_enabled: b.enabled ? 1 : 0, mmg_mode: b.mode === 'live' ? 'live' : 'sandbox', mmg_merchant_id: merchantId,
+    mmg_client_id: str(b.clientId ?? s.mmg_client_id, 120), mmg_secret_key: b.secretKey ? str(b.secretKey, 200) : s.mmg_secret_key,
+    mmg_public_key: pub, mmg_private_key: priv,
+  };
+  if (next.mmg_api_enabled && !mmg.configured({ ...s, ...next })) return bad(res, 'Fill in every MMG field before turning online payments on.');
+  if (next.mmg_api_enabled) {
+    try { mmg.checkoutUrl({ ...s, ...next }, { merchantTransactionId: 'X'.repeat(16), amount: 999999, description: 'Deposit XXXXXX' }); }
+    catch (e) { return bad(res, e.message); }
+  }
+  db.prepare(`UPDATE salons SET mmg_api_enabled=?, mmg_mode=?, mmg_merchant_id=?, mmg_client_id=?, mmg_secret_key=?, mmg_public_key=?, mmg_private_key=? WHERE id=?`)
+    .run(next.mmg_api_enabled, next.mmg_mode, next.mmg_merchant_id, next.mmg_client_id, next.mmg_secret_key, next.mmg_public_key, next.mmg_private_key, s.id);
+  res.json({ ok: true });
+});
+
+// Each owner chooses whether they personally get notification emails.
+admin.put('/notify', (req, res) => {
+  db.prepare('UPDATE owners SET notify_email = ? WHERE id = ?').run(req.body?.email ? 1 : 0, req.owner.id);
+  res.json({ ok: true });
+});
+admin.post('/notify/test', limit('notifytest', 5, 3600e3), async (req, res) => {
+  if (!emailEnabled()) return bad(res, 'Email is not set up on this server yet (SMTP settings in .env).', 409);
+  const [r] = await notify('test', req.salon, null, { to: req.owner.email });
+  if (r?.status === 'rejected') return bad(res, `Sending failed: ${r.reason?.message || 'unknown error'}`, 502);
+  res.json({ ok: true });
 });
 
 admin.put('/salon', (req, res) => {
@@ -418,4 +541,4 @@ app.get('/s/:slug', (req, res) => res.sendFile(path.join(__dirname, 'public', 'b
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', (req, res) => bad(res, 'Not found.', 404));
 
-app.listen(PORT, () => console.log(`SalonBook running at ${BASE_URL} (Google sync ${google.enabled() ? 'ON' : 'OFF – set GOOGLE_CLIENT_ID/SECRET'})`));
+app.listen(PORT, () => console.log(`SalonBook running at ${BASE_URL} (Google sync ${google.enabled() ? 'ON' : 'OFF – set GOOGLE_CLIENT_ID/SECRET'}, email ${emailEnabled() ? 'ON' : 'OFF – set SMTP_*'})`));

@@ -76,5 +76,31 @@ CREATE INDEX IF NOT EXISTS idx_appt_salon_start ON appointments(salon_id, start_
 const salonCols = db.prepare('PRAGMA table_info(salons)').all().map((c) => c.name);
 if (!salonCols.includes('brand_color')) db.exec("ALTER TABLE salons ADD COLUMN brand_color TEXT NOT NULL DEFAULT '#6b2d57'");
 if (!salonCols.includes('logo')) db.exec("ALTER TABLE salons ADD COLUMN logo TEXT NOT NULL DEFAULT ''");
+// MMG Merchant Checkout credentials (per salon; each salon has its own MMG merchant account).
+for (const [col, def] of [
+  ['mmg_api_enabled', 'INTEGER NOT NULL DEFAULT 0'], ['mmg_mode', "TEXT NOT NULL DEFAULT 'sandbox'"],
+  ['mmg_merchant_id', "TEXT NOT NULL DEFAULT ''"], ['mmg_client_id', "TEXT NOT NULL DEFAULT ''"],
+  ['mmg_secret_key', "TEXT NOT NULL DEFAULT ''"], ['mmg_public_key', "TEXT NOT NULL DEFAULT ''"],
+  ['mmg_private_key', "TEXT NOT NULL DEFAULT ''"],
+]) if (!salonCols.includes(col)) db.exec(`ALTER TABLE salons ADD COLUMN ${col} ${def}`);
+
+const ownerCols = db.prepare('PRAGMA table_info(owners)').all().map((c) => c.name);
+if (!ownerCols.includes('notify_email')) db.exec('ALTER TABLE owners ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1');
+
+const apptCols = db.prepare('PRAGMA table_info(appointments)').all().map((c) => c.name);
+if (!apptCols.includes('paid_via')) db.exec("ALTER TABLE appointments ADD COLUMN paid_via TEXT NOT NULL DEFAULT ''"); // '' | 'mmg'
+
+// One row per MMG checkout attempt (a client may cancel and retry; MMG needs a fresh ID each time).
+db.exec(`
+CREATE TABLE IF NOT EXISTS mmg_attempts (
+  merchant_txn_id TEXT PRIMARY KEY,
+  appointment_id INTEGER NOT NULL REFERENCES appointments(id) ON DELETE CASCADE,
+  amount REAL NOT NULL,
+  result_code TEXT,
+  mmg_txn_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mmg_attempt_txn ON mmg_attempts(mmg_txn_id) WHERE mmg_txn_id IS NOT NULL;
+`);
 
 module.exports = db;
