@@ -3,17 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SalonBook – Dashboard</title>
+<title>SalonBook dashboard</title>
+<meta name="description" content="Your salon’s appointments, services and settings.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body class="app">
 <header class="top"><div class="wrap">
   <h1 id="salon-name">SalonBook</h1>
   <button id="logout" type="button" class="small">Sign out</button>
 </div></header>
 
-<div class="wrap">
-  <div id="welcome" class="card hide">
+<main class="wrap dash">
+  <div id="welcome" class="welcome hide">
     <h2>Welcome! Three quick steps</h2>
     <ol>
       <li>Add your services in the <b>Services</b> tab.</li>
@@ -22,134 +26,154 @@
     </ol>
   </div>
 
-  <div class="card" id="link-card">
-    <div class="muted">Your booking link — share it with clients</div>
-    <div class="row" style="align-items:center;margin-top:6px">
-      <input id="booking-url" readonly style="flex:3 1 260px">
-      <button id="copy-link" type="button" style="flex:0 0 auto">Copy</button>
-      <a id="open-link" class="btn ghost" style="flex:0 0 auto" target="_blank" rel="noopener">Preview</a>
+  <div class="link-bar" id="link-card">
+    <label for="booking-url">Your booking link: share it with clients</label>
+    <div class="row">
+      <input id="booking-url" readonly class="field-wide">
+      <button id="copy-link" type="button">Copy</button>
+      <a id="open-link" class="btn ghost" target="_blank" rel="noopener">Preview</a>
     </div>
-    <details style="margin-top:12px">
-      <summary style="cursor:pointer;font-weight:600;color:var(--brand)">QR code for your shop</summary>
-      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">
-        <img id="qr-img" src="/api/admin/qr.svg" alt="QR code for your booking link" width="170" height="170" style="border:1px solid var(--line);border-radius:10px">
+    <details>
+      <summary>QR code for your shop</summary>
+      <div class="qr-box">
+        <img id="qr-img" src="/api/admin/qr.svg" alt="QR code for your booking link" width="170" height="170">
         <div>
-          <p class="muted" style="margin:0 0 10px">Clients scan this with their phone camera to open your booking page. Print it for the door, mirror or counter.</p>
-          <button id="print-poster" type="button" class="small">Print poster</button>
-          <a class="btn ghost small" href="/api/admin/qr.svg?download=1">Download QR (SVG)</a>
+          <p class="muted">Clients scan this with their phone camera to open your booking page. Print it for the door, mirror or counter.</p>
+          <div class="actions">
+            <button id="print-poster" type="button" class="small">Print poster</button>
+            <a class="btn ghost small" href="/api/admin/qr.svg?download=1">Download QR (SVG)</a>
+          </div>
         </div>
       </div>
     </details>
   </div>
 
+  <div>
   <div class="tabs" role="tablist">
-    <button data-tab="appts" class="on">Appointments</button>
-    <button data-tab="services">Services</button>
-    <button data-tab="settings">Settings</button>
+    <button data-tab="appts" class="on" type="button">Appointments</button>
+    <button data-tab="services" type="button">Services</button>
+    <button data-tab="settings" type="button">Settings</button>
   </div>
 
   <!-- APPOINTMENTS -->
   <section id="tab-appts">
-    <div class="row" style="margin-bottom:8px">
+    <div class="toolbar">
       <select id="appt-filter" aria-label="Filter appointments">
         <option value="action">Needs my action</option>
         <option value="upcoming" selected>Upcoming (active)</option>
         <option value="all">Everything (incl. cancelled)</option>
       </select>
-      <button id="refresh" class="ghost" type="button" style="flex:0 0 auto">Refresh</button>
+      <button id="refresh" class="ghost" type="button">Refresh</button>
     </div>
     <div id="appt-list"></div>
   </section>
 
   <!-- SERVICES -->
   <section id="tab-services" class="hide">
-    <div class="card">
-      <h3>Add a service</h3>
-      <form id="svc-add" class="row" style="align-items:end">
-        <div><label for="s-name">Name</label><input id="s-name" required placeholder="e.g. Silk press" maxlength="80"></div>
-        <div><label for="s-dur">Minutes</label><input id="s-dur" type="number" min="10" max="600" step="5" required value="60"></div>
-        <div><label for="s-price">Price (GYD)</label><input id="s-price" type="number" min="0" step="100" required></div>
-        <button type="submit" style="flex:0 0 auto">Add</button>
-      </form>
-      <div class="err" id="err-svc"></div>
+    <div class="set">
+      <header><h3>Add a service</h3></header>
+      <div>
+        <form id="svc-add" class="row">
+          <div class="field-wide"><label for="s-name">Name</label><input id="s-name" required placeholder="e.g. Silk press" maxlength="80"></div>
+          <div><label for="s-dur">Minutes</label><input id="s-dur" type="number" min="10" max="600" step="5" required value="60"></div>
+          <div><label for="s-price">Price (GYD)</label><input id="s-price" type="number" min="0" step="100" required></div>
+          <button type="submit">Add</button>
+        </form>
+        <div class="err" id="err-svc"></div>
+      </div>
     </div>
-    <div class="card"><h3>Your services</h3><div id="svc-list" class="muted">Loading…</div></div>
+    <div class="set"><header><h3>Your services</h3></header><div id="svc-list" class="muted">Loading…</div></div>
   </section>
 
   <!-- SETTINGS -->
   <section id="tab-settings" class="hide">
     <form id="settings-form">
-      <div class="card">
-        <h3>Salon details</h3>
-        <label for="f-name">Salon name</label><input id="f-name" required maxlength="80">
-        <div class="row">
-          <div><label for="f-phone">Phone / WhatsApp</label><input id="f-phone" maxlength="30"></div>
-          <div><label for="f-tz">Timezone</label><input id="f-tz" placeholder="America/Guyana"></div>
-        </div>
-        <label for="f-addr">Address</label><input id="f-addr" maxlength="200">
-        <div class="row">
-          <div><label for="f-cap">Stylists working at once</label><input id="f-cap" type="number" min="1" max="20"></div>
-          <div><label for="f-step">Time slots every</label>
-            <select id="f-step"><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option></select></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>MMG deposit</h3>
-        <p class="muted">Clients are shown these details and must send the deposit to hold their appointment. You confirm once the money arrives.</p>
-        <div class="row">
-          <div><label for="f-mmg">MMG number</label><input id="f-mmg" inputmode="tel" maxlength="30"></div>
-          <div><label for="f-mmgname">Name on MMG account</label><input id="f-mmgname" maxlength="80"></div>
-        </div>
-        <div class="row">
-          <div><label for="f-dtype">Deposit type</label>
-            <select id="f-dtype"><option value="percent">Percent of price</option><option value="fixed">Fixed amount (GYD)</option></select></div>
-          <div><label for="f-dval">Deposit value</label><input id="f-dval" type="number" min="0" step="any"></div>
-          <div><label for="f-hold">Hold slot for (minutes)</label><input id="f-hold" type="number" min="10" max="1440"></div>
+      <div class="set">
+        <header><h3>Salon details</h3></header>
+        <div>
+          <label for="f-name">Salon name</label><input id="f-name" required maxlength="80">
+          <div class="row">
+            <div><label for="f-phone">Phone / WhatsApp</label><input id="f-phone" maxlength="30"></div>
+            <div><label for="f-tz">Timezone</label><input id="f-tz" placeholder="America/Guyana"></div>
+          </div>
+          <label for="f-addr">Address</label><input id="f-addr" maxlength="200">
+          <div class="row">
+            <div><label for="f-cap">Stylists working at once</label><input id="f-cap" type="number" min="1" max="20"></div>
+            <div><label for="f-step">Time slots every</label>
+              <select id="f-step"><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option></select></div>
+          </div>
         </div>
       </div>
 
-      <div class="card">
-        <h3>Branding</h3>
-        <p class="muted">Shown on your booking page so clients know they're in the right place.</p>
-        <div class="row" style="align-items:end">
-          <div style="flex:0 0 120px"><label for="f-color">Brand colour</label><input id="f-color" type="color" value="#6b2d57" style="height:46px;padding:4px"></div>
-          <div><label for="f-logo">Logo <span class="muted">(PNG/JPG, shrunk automatically)</span></label><input id="f-logo" type="file" accept="image/png,image/jpeg,image/webp"></div>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
-          <img id="logo-prev" class="hide" alt="Logo preview" style="height:56px;width:56px;object-fit:cover;border-radius:10px;border:1px solid var(--line)">
-          <button id="logo-clear" type="button" class="ghost small hide">Remove logo</button>
+      <div class="set">
+        <header>
+          <h3>MMG deposit</h3>
+          <p class="muted">Clients are shown these details and must send the deposit to hold their appointment. You confirm once the money arrives.</p>
+        </header>
+        <div>
+          <div class="row">
+            <div><label for="f-mmg">MMG number</label><input id="f-mmg" inputmode="tel" maxlength="30"></div>
+            <div><label for="f-mmgname">Name on MMG account</label><input id="f-mmgname" maxlength="80"></div>
+          </div>
+          <div class="row">
+            <div><label for="f-dtype">Deposit type</label>
+              <select id="f-dtype"><option value="percent">Percent of price</option><option value="fixed">Fixed amount (GYD)</option></select></div>
+            <div><label for="f-dval">Deposit value</label><input id="f-dval" type="number" min="0" step="any"></div>
+            <div><label for="f-hold">Hold slot for (minutes)</label><input id="f-hold" type="number" min="10" max="1440"></div>
+          </div>
         </div>
       </div>
 
-      <div class="card">
-        <h3>Opening hours</h3>
+      <div class="set">
+        <header>
+          <h3>Branding</h3>
+          <p class="muted">Shown on your booking page so clients know they’re in the right place.</p>
+        </header>
+        <div>
+          <div class="row">
+            <div class="f-color"><label for="f-color">Brand colour</label><input id="f-color" type="color" value="#6b2d57"></div>
+            <div><label for="f-logo">Logo <span class="muted">(PNG/JPG, shrunk automatically)</span></label><input id="f-logo" type="file" accept="image/png,image/jpeg,image/webp"></div>
+          </div>
+          <div class="logo-row">
+            <img id="logo-prev" class="hide" alt="Logo preview" width="56" height="56" src="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22/%3E">
+            <button id="logo-clear" type="button" class="ghost small hide">Remove logo</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="set">
+        <header><h3>Opening hours</h3></header>
         <div id="hours"></div>
       </div>
 
       <div class="err" id="err-set"></div>
-      <button type="submit">Save settings</button> <span id="saved" class="ok-msg"></span>
+      <div class="save-bar"><button type="submit">Save settings</button> <span id="saved" class="ok-msg"></span></div>
     </form>
 
-    <div class="card" style="margin-top:22px">
-      <h3>Google Calendar</h3>
+    <div class="set">
+      <header><h3>Google Calendar</h3></header>
       <div id="google-box" class="muted">Loading…</div>
     </div>
 
-    <div class="card">
-      <h3>Owners &amp; managers</h3>
-      <p class="muted">Everyone listed here can sign in to this salon, and each connects their own Google Calendar.</p>
-      <div id="owners-list"></div>
-      <form id="owner-add" class="row" style="align-items:end;margin-top:8px">
-        <div><label for="o-name">Name</label><input id="o-name" required></div>
-        <div><label for="o-email">Email</label><input id="o-email" type="email" required></div>
-        <div><label for="o-pass">Password</label><input id="o-pass" type="password" minlength="8" required></div>
-        <button type="submit" style="flex:0 0 auto">Add</button>
-      </form>
-      <div class="err" id="err-own"></div>
+    <div class="set">
+      <header>
+        <h3>Owners &amp; managers</h3>
+        <p class="muted">Everyone listed here can sign in to this salon, and each connects their own Google Calendar.</p>
+      </header>
+      <div>
+        <div id="owners-list" class="owners"></div>
+        <form id="owner-add" class="row">
+          <div><label for="o-name">Name</label><input id="o-name" required></div>
+          <div><label for="o-email">Email</label><input id="o-email" type="email" required></div>
+          <div><label for="o-pass">Password</label><input id="o-pass" type="password" minlength="8" required></div>
+          <button type="submit">Add</button>
+        </form>
+        <div class="err" id="err-own"></div>
+      </div>
     </div>
   </section>
-</div>
+  </div>
+</main>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -190,28 +214,34 @@ async function loadAppts() {
   if (f === 'action') list = list.filter((a) => a.status === 'payment_submitted');
   else if (f === 'upcoming') list = list.filter((a) => ['pending_payment', 'payment_submitted', 'confirmed'].includes(a.status));
   const box = $('appt-list');
-  if (!list.length) { box.innerHTML = '<div class="card muted">Nothing here yet.</div>'; return; }
+  if (!list.length) { box.innerHTML = '<p class="empty">Nothing here yet. New bookings appear here as clients make them.</p>'; return; }
   let html = '', lastDay = '';
   for (const a of list) {
     const day = a.start.slice(0, 10);
     if (day !== lastDay) { html += `<div class="day">${esc(fmtDay(day))}</div>`; lastDay = day; }
     const tel = a.clientPhone.replace(/[^\d+]/g, '');
-    html += `<div class="card appt">
-      <div class="time">${fmtTime(a.start.slice(11))}<div class="muted">to ${fmtTime(a.end.slice(11))}</div></div>
+    html += `<article class="appt">
+      <div class="time">${fmtTime(a.start.slice(11))}<span class="muted">to ${fmtTime(a.end.slice(11))}</span></div>
       <div>
-        <div><b>${esc(a.clientName)}</b> · ${esc(a.service)} <span class="badge b-${a.status}">${STATUS[a.status]}</span>
-          ${a.synced ? '<span class="muted" title="In your Google Calendar"> 📅</span>' : ''}</div>
-        <div class="muted">${esc(a.clientPhone)}${a.clientEmail ? ' · ' + esc(a.clientEmail) : ''}</div>
-        <div class="muted">Price ${money(a.price)} · Deposit ${money(a.deposit)} · Code <b>${esc(a.code)}</b></div>
-        ${a.paymentRef ? `<div>MMG transaction ID: <b>${esc(a.paymentRef)}</b></div>` : ''}
-        ${a.notes ? `<div class="muted">Note: ${esc(a.notes)}</div>` : ''}
-        <div class="actions">
-          ${['pending_payment', 'payment_submitted'].includes(a.status) ? `<button class="small" data-act="confirm" data-id="${a.id}">Payment received – confirm</button>` : ''}
-          ${['pending_payment', 'payment_submitted', 'confirmed'].includes(a.status) ? `<button class="small danger" data-act="cancel" data-id="${a.id}">Cancel</button>` : ''}
-          <a class="btn ghost small" href="tel:${esc(tel)}">Call</a>
-          <a class="btn ghost small" target="_blank" rel="noopener" href="https://wa.me/${esc(tel.replace('+', ''))}">WhatsApp</a>
-        </div>
-      </div></div>`;
+        <p class="appt-head"><b>${esc(a.clientName)}</b> <span class="badge b-${a.status}">${STATUS[a.status]}</span>
+          ${a.synced ? '<span class="synced">In Google Calendar</span>' : ''}</p>
+        <p class="appt-svc">${esc(a.service)}</p>
+        <dl class="facts">
+          <div><dt>Phone</dt><dd>${esc(a.clientPhone)}</dd></div>
+          ${a.clientEmail ? `<div><dt>Email</dt><dd>${esc(a.clientEmail)}</dd></div>` : ''}
+          <div><dt>Price</dt><dd>${money(a.price)}</dd></div>
+          <div><dt>Deposit</dt><dd>${money(a.deposit)}</dd></div>
+          <div><dt>Code</dt><dd><b>${esc(a.code)}</b></dd></div>
+          ${a.paymentRef ? `<div><dt>MMG transaction ID</dt><dd><b>${esc(a.paymentRef)}</b></dd></div>` : ''}
+        </dl>
+        ${a.notes ? `<p class="appt-note">Note: ${esc(a.notes)}</p>` : ''}
+      </div>
+      <div class="actions">
+        ${['pending_payment', 'payment_submitted'].includes(a.status) ? `<button type="button" class="small" data-act="confirm" data-id="${a.id}">Payment received: confirm</button>` : ''}
+        ${['pending_payment', 'payment_submitted', 'confirmed'].includes(a.status) ? `<button type="button" class="small danger" data-act="cancel" data-id="${a.id}">Cancel</button>` : ''}
+        <a class="btn ghost small" href="tel:${esc(tel)}">Call</a>
+        <a class="btn ghost small" target="_blank" rel="noopener" href="https://wa.me/${esc(tel.replace('+', ''))}">WhatsApp</a>
+      </div></article>`;
   }
   box.innerHTML = html;
 }
@@ -230,13 +260,13 @@ setInterval(() => { if (!document.hidden && !$('tab-appts').classList.contains('
 // ---------- services ----------
 async function loadServices() {
   const list = (await api('GET', '/api/admin/services')).filter((s) => s.active);
-  $('svc-list').innerHTML = list.length ? `<table class="svcs">${list.map((s) => `
+  $('svc-list').innerHTML = list.length ? `<table class="svcs"><thead><tr><th scope="col">Name</th><th scope="col">Minutes</th><th scope="col">Price (GYD)</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>${list.map((s) => `
     <tr data-id="${s.id}">
       <td><input value="${esc(s.name)}" data-f="name" aria-label="Name"></td>
-      <td style="width:90px"><input type="number" value="${s.durationMin}" data-f="durationMin" aria-label="Minutes"></td>
-      <td style="width:120px"><input type="number" value="${s.price}" data-f="price" aria-label="Price"></td>
-      <td style="width:1%;white-space:nowrap"><button class="small" data-a="save">Save</button> <button class="small danger" data-a="del">Remove</button></td>
-    </tr>`).join('')}</table>` : 'No services yet — add your first one above.';
+      <td class="c-min"><input type="number" value="${s.durationMin}" data-f="durationMin" aria-label="Minutes"></td>
+      <td class="c-price"><input type="number" value="${s.price}" data-f="price" aria-label="Price"></td>
+      <td class="c-act"><button type="button" class="small" data-a="save">Save</button> <button type="button" class="small danger" data-a="del">Remove</button></td>
+    </tr>`).join('')}</tbody></table>` : 'No services yet. Add your first one above.';
 }
 $('svc-list').onclick = async (e) => {
   const b = e.target.closest('button[data-a]'); if (!b) return;
@@ -265,7 +295,7 @@ function renderHours(h) {
     return `<div class="hours-row" data-d="${i}"><b>${d}</b>
       <input type="time" value="${v ? v[0] : '09:00'}" ${v ? '' : 'disabled'} aria-label="${d} opens">
       <input type="time" value="${v ? v[1] : '17:00'}" ${v ? '' : 'disabled'} aria-label="${d} closes">
-      <label style="margin:0;font-weight:400"><input type="checkbox" ${v ? 'checked' : ''} style="width:auto"> open</label></div>`;
+      <label><input type="checkbox" ${v ? 'checked' : ''}> open</label></div>`;
   }).join('');
   $('hours').querySelectorAll('input[type=checkbox]').forEach((c) => c.onchange = () =>
     c.closest('.hours-row').querySelectorAll('input[type=time]').forEach((t) => t.disabled = !c.checked));
@@ -295,7 +325,7 @@ $('settings-form').onsubmit = async (e) => {
       depositType: $('f-dtype').value, depositValue: $('f-dval').value, holdMinutes: $('f-hold').value, hours,
       brandColor: $('f-color').value, ...(LOGO !== null ? { logo: LOGO } : {}),
     });
-    ME = await api('GET', '/api/admin/me'); fillSettings(); $('saved').textContent = 'Saved ✓';
+    ME = await api('GET', '/api/admin/me'); fillSettings(); $('saved').textContent = 'Saved';
   } catch (x) { $('err-set').textContent = x.message; }
 };
 
@@ -319,12 +349,14 @@ $('logo-clear').onclick = () => { LOGO = ''; showLogo(''); $('f-logo').value = '
 
 $('print-poster').onclick = () => {
   const s = ME.salon, w = window.open('', '_blank'); if (!w) return alert('Please allow pop-ups to print the poster.');
-  w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(s.name)} – booking poster</title>
-  <style>body{font-family:Georgia,serif;text-align:center;padding:48px;color:#231b1f}h1{font-size:46px;margin:14px 0 4px;color:${esc(s.brandColor)}}
-  .logo{height:110px;border-radius:14px}p{font-size:24px;margin:8px 0}.qr{width:380px;height:380px;margin:18px auto}.url{font-family:monospace;font-size:18px;word-break:break-all}</style>
+  w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(s.name)}: booking poster</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
+  <style>:root{--space-2xs:4px;--space-xs:8px;--space-md:16px;--ink:oklch(21% 0.025 345);--muted:oklch(46% 0.025 345);--brand:${esc(s.brandColor)};--display:"Fraunces",Georgia,serif;--body:"Instrument Sans",system-ui,sans-serif}
+  body{font-family:var(--body);text-align:center;padding:48px;color:var(--ink)}h1{font-family:var(--display);font-weight:600;font-size:52px;margin:var(--space-md) 0 var(--space-2xs);color:var(--brand)}
+  .logo{height:112px;border-radius:16px}p{font-size:24px;margin:var(--space-xs) 0}.qr{width:380px;height:380px;margin:var(--space-md) auto}.url{font-size:18px;word-break:break-all}.foot{font-size:17px;color:var(--muted)}</style>
   ${s.logo ? `<img class="logo" src="${s.logo}">` : ''}<h1>${esc(s.name)}</h1><p>Scan to book your appointment</p>
   <img class="qr" src="${location.origin}/api/admin/qr.svg"><p class="url">${esc(ME.bookingUrl)}</p>
-  <p style="font-size:17px;color:#6f6269">Secure your time with a small MMG deposit</p>
+  <p class="foot">Secure your time with a small MMG deposit</p>
   <script>onload=()=>setTimeout(()=>print(),500)<\/script>`);
   w.document.close();
 };
@@ -332,14 +364,14 @@ $('print-poster').onclick = () => {
 function renderGoogle() {
   const g = ME.google, box = $('google-box');
   if (!g.available) box.innerHTML = 'Google sync is not set up on this server yet. The server admin needs to add Google credentials (see README). Bookings still work without it.';
-  else if (g.connected) box.innerHTML = `<p class="ok-msg">Connected${g.email ? ' as ' + esc(g.email) : ''} ✓</p><p>Confirmed appointments are added to your primary Google Calendar, and removed if cancelled.</p><button class="ghost small" id="g-off">Disconnect</button>`;
+  else if (g.connected) box.innerHTML = `<p class="ok-msg">Connected${g.email ? ' as ' + esc(g.email) : ''}</p><p>Confirmed appointments are added to your primary Google Calendar, and removed if cancelled.</p><button type="button" class="ghost small" id="g-off">Disconnect</button>`;
   else box.innerHTML = `<p>Connect your Google account so confirmed appointments appear in your calendar automatically.</p><a class="btn" href="/api/google/connect">Connect Google Calendar</a>`;
   const off = $('g-off');
   if (off) off.onclick = async () => { await api('POST', '/api/google/disconnect'); ME = await api('GET', '/api/admin/me'); renderGoogle(); };
 }
 async function loadOwners() {
   const list = await api('GET', '/api/admin/owners');
-  $('owners-list').innerHTML = list.map((o) => `<div>${esc(o.name)} <span class="muted">· ${esc(o.email)} · ${o.googleConnected ? 'calendar connected' : 'calendar not connected'}</span></div>`).join('');
+  $('owners-list').innerHTML = list.map((o) => `<div><b>${esc(o.name)}</b><span>${esc(o.email)}</span><span class="muted">${o.googleConnected ? 'Calendar connected' : 'Calendar not connected'}</span></div>`).join('');
 }
 $('owner-add').onsubmit = async (e) => {
   e.preventDefault(); $('err-own').textContent = '';
@@ -353,7 +385,7 @@ $('owner-add').onsubmit = async (e) => {
   fillSettings(); renderGoogle();
   const q = new URLSearchParams(location.search);
   if (q.get('welcome')) $('welcome').classList.remove('hide');
-  const gmsg = { connected: 'Google Calendar connected ✓', error: 'Google connection failed. Please try again.', unconfigured: 'Google sync is not configured on this server.' }[q.get('google')];
+  const gmsg = { connected: 'Google Calendar connected.', error: 'Google connection failed. Please try again.', unconfigured: 'Google sync is not configured on this server.' }[q.get('google')];
   if (gmsg) { alert(gmsg); history.replaceState(null, '', '/admin.html'); }
   await Promise.all([loadAppts(), loadServices(), loadOwners()]);
 })();

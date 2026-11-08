@@ -3,49 +3,60 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SalonBook – online booking for salons</title>
+<title>SalonBook: online booking for salons</title>
+<meta name="description" content="A booking link for your salon: clients pick a time, send an MMG deposit, and confirmed appointments land in your Google Calendar.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<div class="wrap narrow">
-  <div class="hero">
-    <h1>Bookings that pay their own deposit.</h1>
-    <p>Give your clients a booking link. They pick a time and send an MMG deposit; you confirm it and the appointment lands in your Google Calendar.</p>
-  </div>
-
-  <div class="card">
-    <div class="tabs" style="margin-top:0">
-      <button id="tab-in" class="on" type="button">Sign in</button>
-      <button id="tab-up" type="button">Register your salon</button>
-    </div>
-
-    <form id="form-in">
-      <label for="in-email">Email</label>
-      <input id="in-email" type="email" autocomplete="username" required>
-      <label for="in-pass">Password</label>
-      <input id="in-pass" type="password" autocomplete="current-password" required>
-      <div class="err" id="err-in" role="alert"></div>
-      <button type="submit" style="width:100%;margin-top:6px">Sign in</button>
-    </form>
-
-    <form id="form-up" class="hide">
-      <label for="up-salon">Salon name</label>
-      <input id="up-salon" required maxlength="80">
-      <label for="up-name">Your name</label>
-      <input id="up-name" autocomplete="name" required>
-      <label for="up-email">Email</label>
-      <input id="up-email" type="email" autocomplete="username" required>
-      <label for="up-pass">Password (8+ characters)</label>
-      <input id="up-pass" type="password" autocomplete="new-password" minlength="8" required>
-      <div id="code-wrap">
-        <label for="up-code">Registration code (if you were given one)</label>
-        <input id="up-code">
+<main class="auth">
+  <div class="container">
+    <section class="auth-field">
+      <a class="wordmark" href="/" aria-label="SalonBook home">SalonBook</a>
+      <div>
+        <h1>Bookings that pay their own deposit.</h1>
+        <p class="lead">Give your clients a booking link. They pick a time and send an MMG deposit; you confirm it and the appointment lands in your Google Calendar.</p>
       </div>
-      <div class="err" id="err-up" role="alert"></div>
-      <button type="submit" style="width:100%;margin-top:6px">Create my salon</button>
-    </form>
+    </section>
+
+    <section class="auth-panel" aria-label="Sign in or register">
+      <div>
+        <div class="tabs">
+          <button id="tab-in" class="on" type="button">Sign in</button>
+          <button id="tab-up" type="button">Register your salon</button>
+        </div>
+
+        <form id="form-in">
+          <label for="in-email">Email</label>
+          <input id="in-email" type="email" autocomplete="username" required>
+          <label for="in-pass">Password</label>
+          <input id="in-pass" type="password" autocomplete="current-password" required>
+          <div class="err" id="err-in" role="alert"></div>
+          <button type="submit">Sign in</button>
+        </form>
+
+        <form id="form-up" class="hide">
+          <label for="up-salon">Salon name</label>
+          <input id="up-salon" required maxlength="80">
+          <label for="up-name">Your name</label>
+          <input id="up-name" autocomplete="name" required>
+          <label for="up-email">Email</label>
+          <input id="up-email" type="email" autocomplete="username" required>
+          <label for="up-pass">Password (8+ characters)</label>
+          <input id="up-pass" type="password" autocomplete="new-password" minlength="8" required>
+          <div id="code-wrap">
+            <label for="up-code">Registration code (if you were given one)</label>
+            <input id="up-code">
+          </div>
+          <div class="err" id="err-up" role="alert"></div>
+          <button type="submit">Create my salon</button>
+        </form>
+      </div>
+    </section>
   </div>
-</div>
+</main>
 
 <script>
 const $ = (id) => document.getElementById(id);

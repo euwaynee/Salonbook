@@ -4,33 +4,40 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Book an appointment</title>
+<meta name="description" content="Choose a service and a time, then hold it with an MMG deposit.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<header class="top"><div class="wrap"><div style="display:flex;align-items:center;gap:10px;min-width:0"><img id="logo" class="hide" alt="" style="height:38px;width:38px;border-radius:9px;object-fit:cover;background:#fff;flex:0 0 auto"><h1 id="salon-name">Book an appointment</h1></div></div></header>
-<div class="wrap narrow">
+<body class="app">
+<header class="top"><div class="wrap narrow"><div class="brand-id"><img id="logo" class="hide" alt="" width="44" height="44" src="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22/%3E"><h1 id="salon-name">Book an appointment</h1></div></div></header>
+<main class="wrap narrow book-main">
   <div id="loading" class="muted">Loading…</div>
-  <div id="notfound" class="card hide"><h2>Salon not found</h2><p class="muted">Please check the link you were given.</p></div>
+  <div id="notfound" class="hide"><h2>Salon not found</h2><p class="muted">Please check the link you were given.</p></div>
 
   <!-- BOOKING FLOW -->
   <div id="flow" class="hide">
-    <p class="muted" id="salon-info"></p>
-    <div class="steps"><span class="on" id="st1">1 Service</span><span id="st2">2 Time</span><span id="st3">3 Your details</span></div>
+    <aside class="flow-side">
+      <p class="muted" id="salon-info"></p>
+      <div class="steps"><span class="on" id="st1">1 Service</span><span id="st2">2 Time</span><span id="st3">3 Your details</span></div>
+    </aside>
 
-    <div class="card" id="step-service">
+    <div class="flow-main">
+    <section class="step" id="step-service">
       <h2>Choose a service</h2>
-      <div id="svc-list"></div>
-    </div>
+      <div id="svc-list" class="svc-list"></div>
+    </section>
 
-    <div class="card hide" id="step-time">
+    <section class="step hide" id="step-time">
       <h2>Pick a day and time</h2>
       <label for="date">Date</label>
       <input id="date" type="date">
-      <div id="slots" class="chips" style="margin-top:12px"></div>
+      <div id="slots" class="chips"></div>
       <div class="muted" id="slot-msg"></div>
-    </div>
+    </section>
 
-    <form class="card hide" id="step-details">
+    <form class="step hide" id="step-details">
       <h2>Your details</h2>
       <div class="muted" id="summary"></div>
       <label for="c-name">Full name</label><input id="c-name" autocomplete="name" required maxlength="80">
@@ -38,13 +45,14 @@
       <label for="c-email">Email <span class="muted">(optional)</span></label><input id="c-email" type="email" autocomplete="email" maxlength="120">
       <label for="c-notes">Anything we should know? <span class="muted">(optional)</span></label><textarea id="c-notes" rows="2" maxlength="300"></textarea>
       <div class="err" id="err-book" role="alert"></div>
-      <button type="submit" style="width:100%;margin-top:6px" id="book-btn">Continue to deposit</button>
+      <button type="submit" id="book-btn">Continue to deposit</button>
     </form>
+    </div>
   </div>
 
   <!-- PAYMENT / STATUS -->
   <div id="status" class="hide"></div>
-</div>
+</main>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -85,7 +93,7 @@ function renderServices() {
   $('svc-list').innerHTML = SERVICES.length ? SERVICES.map((s) => `
     <button type="button" class="svc ${sel.service?.id === s.id ? 'on' : ''}" data-id="${s.id}">
       <span>${esc(s.name)}<small>${s.duration_min} min</small></span>
-      <span style="text-align:right"><b>${money(s.price)}</b><small>deposit ${money(s.deposit)}</small></span>
+      <span class="svc-price"><b>${money(s.price)}</b><small>deposit ${money(s.deposit)}</small></span>
     </button>`).join('') : '<p class="muted">This salon has not added any services yet.</p>';
 }
 $('svc-list').onclick = (e) => {
@@ -101,7 +109,7 @@ async function loadSlots() {
   $('slots').innerHTML = ''; $('slot-msg').textContent = 'Checking availability…';
   try {
     const { slots } = await call('GET', `${API}/slots?service=${sel.service.id}&date=${sel.date}`);
-    $('slot-msg').textContent = slots.length ? '' : 'No times available that day — please try another date.';
+    $('slot-msg').textContent = slots.length ? '' : 'No times available that day. Please try another date.';
     $('slots').innerHTML = slots.map((t) => `<button type="button" class="chip ${sel.time === t ? 'on' : ''}" data-t="${t}">${fmtTime(t)}</button>`).join('');
   } catch (x) { $('slot-msg').textContent = x.message; }
 }
@@ -109,7 +117,7 @@ $('slots').onclick = (e) => {
   const b = e.target.closest('.chip'); if (!b) return;
   sel.time = b.dataset.t;
   $('slots').querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c === b));
-  $('summary').innerHTML = `<b>${esc(sel.service.name)}</b> · ${esc(fmtDate(sel.date))} at ${fmtTime(sel.time)}<br>Deposit to secure: <b>${money(sel.service.deposit)}</b>`;
+  $('summary').innerHTML = `<b>${esc(sel.service.name)}</b><br>${esc(fmtDate(sel.date))} at ${fmtTime(sel.time)}<br>Deposit to secure: <b>${money(sel.service.deposit)}</b>`;
   setStep(3);
   $('step-details').scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
@@ -138,7 +146,7 @@ async function showStatus(code) {
   catch (x) { $('status').innerHTML = `<div class="card"><h2>Booking not found</h2><p class="muted">${esc(x.message)}</p><a href="${location.pathname}">Start a new booking</a></div>`; return; }
   const a = d.appointment, m = d.salon.mmg;
   const when = `${esc(fmtDate(a.start.slice(0, 10)))} at ${fmtTime(a.start.slice(11))}`;
-  const head = `<div class="card"><h2>${esc(a.service)}</h2><div>${when}</div><div class="muted">Booking code <span class="code">${esc(a.code)}</span></div></div>`;
+  const head = `<div class="card ticket"><h2>${esc(a.service)}</h2><div>${when}</div><div class="muted">Booking code <span class="code">${esc(a.code)}</span></div></div>`;
   let body = '';
 
   if (a.status === 'pending_payment') {
@@ -155,13 +163,13 @@ async function showStatus(code) {
         <label for="ref">After paying, enter the MMG transaction ID from your receipt</label>
         <input id="ref" required minlength="4" maxlength="60" autocomplete="off">
         <div class="err" id="err-pay" role="alert"></div>
-        <button type="submit" style="width:100%;margin-top:6px">I've paid</button>
+        <button type="submit">I’ve paid</button>
       </form></div>`;
   } else if (a.status === 'payment_submitted') {
-    body = `<div class="card"><h2>Thanks — payment reported</h2>
+    body = `<div class="card"><h2>Thanks, payment reported</h2>
       <p>The salon will check the deposit and confirm your appointment. Keep this page or your code <b>${esc(a.code)}</b>; this page updates automatically.</p></div>`;
   } else if (a.status === 'confirmed') {
-    body = `<div class="card"><h2 class="ok-msg">You're booked! ✓</h2>
+    body = `<div class="card"><h2 class="ok-msg">You’re booked!</h2>
       <p>See you ${when}.</p>
       ${d.salon.address ? `<p class="muted">${esc(d.salon.address)}</p>` : ''}
       ${d.salon.phone ? `<p class="muted">Need to change something? Contact the salon: ${esc(d.salon.phone)}</p>` : ''}</div>`;
@@ -193,7 +201,7 @@ async function showStatus(code) {
     document.title = `Book at ${SALON.name}`;
     applyBrand(SALON);
     $('salon-name').textContent = SALON.name;
-    $('salon-info').textContent = [SALON.address, SALON.phone].filter(Boolean).join(' · ');
+    $('salon-info').textContent = [SALON.address, SALON.phone].filter(Boolean).join('\n');
     $('date').min = today;
     $('loading').classList.add('hide');
     const code = new URLSearchParams(location.search).get('code');
