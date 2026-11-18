@@ -33,6 +33,12 @@ async function email(salon, owners, msg) {
   });
 }
 
+// Account mail to one address (password resets). Ignores the notify_email preference.
+async function sendMail(to, subject, text) {
+  if (!emailEnabled()) throw new Error('Email is not configured');
+  await mailer().sendMail({ from: `"SalonBook" <${SMTP.from}>`, to, subject, text });
+}
+
 const CHANNELS = [email];
 
 const money = (n) => 'GYD ' + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -84,4 +90,4 @@ function notify(event, salon, appt, opts = {}) {
   });
 }
 
-module.exports = { notify, emailEnabled };
+module.exports = { notify, emailEnabled, sendMail };

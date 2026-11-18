@@ -6,3 +6,5 @@ node_modules
 .hallmark/before/
 .hallmark/*.json
 .hallmark/*.txt
+.env.*
+!.env.example

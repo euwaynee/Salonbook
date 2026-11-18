@@ -14,7 +14,7 @@ const path = require('path');
 const db = require('./db');
 const google = require('./google');
 const mmg = require('./mmg');
-const { notify, emailEnabled } = require('./notify');
+const { notify, emailEnabled, sendMail } = require('./notify');
 
 const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -61,6 +61,22 @@ setInterval(() => { const now = Date.now(); for (const [k, v] of hits) if (!v.so
 // ---------- helpers ----------
 const app = express();
 app.set('trust proxy', 'loopback'); // only honour X-Forwarded-For from a local reverse proxy
+app.disable('x-powered-by');
+// Security headers. Pages use inline <script>/<style>, Google Fonts, and data:/blob: images (logos).
+const CSP = [
+  "default-src 'self'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data: blob:", "connect-src 'self'",
+  "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'none'",
+].join('; ');
+app.use((req, res, next) => {
+  // Visitors who arrive over plain http through the proxy are sent to https (sign-in cookies only work there).
+  if (SECURE_COOKIE && req.headers['x-forwarded-proto'] === 'http' && ['GET', 'HEAD'].includes(req.method))
+    return res.redirect(301, BASE_URL + req.originalUrl);
+  res.set({ 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' });
+  if (SECURE_COOKIE) res.set('Strict-Transport-Security', 'max-age=15552000');
+  if (req.path.startsWith('/api/')) res.set('Cache-Control', 'no-store');
+  next();
+});
 app.use(express.json({ limit: '300kb' }));
 
 const str = (v, max = 200) => String(v ?? '').trim().slice(0, max);
@@ -134,7 +150,7 @@ const apptOut = (a) => ({
 // ---------- auth ----------
 function requireOwner(req, res, next) {
   const p = verify(parseCookies(req).sb_session);
-  if (!p) return bad(res, 'Please sign in.', 401);
+  if (!p || p.n) return bad(res, 'Please sign in.', 401); // p.n marks single-purpose tokens (reset links, OAuth state), never sessions
   const owner = db.prepare('SELECT * FROM owners WHERE id = ?').get(p.oid);
   if (!owner) return bad(res, 'Please sign in.', 401);
   req.owner = owner;
@@ -174,6 +190,41 @@ app.post('/api/auth/login', limit('login', 10, 15 * 60e3), (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => { res.clearCookie('sb_session'); res.json({ ok: true }); });
+
+// ---------- password reset by email ----------
+// The emailed link carries a signed 1-hour token tied to the current password hash, so it dies once the password changes.
+const pwMark = (owner) => crypto.createHmac('sha256', SECRET).update('pw:' + owner.password_hash).digest('base64url').slice(0, 16);
+
+app.post('/api/auth/forgot', limit('forgot', 5, 3600e3), (req, res) => {
+  if (!emailEnabled()) return bad(res, 'Password reset by email is not set up on this server. Ask whoever runs it to reset your password.', 409);
+  const em = str(req.body?.email).toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(em)) return bad(res, 'Enter the email you sign in with.');
+  const owner = db.prepare('SELECT * FROM owners WHERE email = ?').get(em);
+  // Same answer whether or not the account exists, so this can't be used to find out who has one.
+  if (owner) {
+    const now = Date.now(), key = `forgotmail:${owner.id}`;
+    const sent = (hits.get(key) || []).filter((t) => now - t < 3600e3);
+    if (sent.length < 3) { // at most 3 reset emails an hour per account, whoever asks
+      sent.push(now); hits.set(key, sent);
+      const link = `${BASE_URL}/reset.html#${sign({ oid: owner.id, exp: now + 3600e3, n: 'pw', m: pwMark(owner) })}`;
+      sendMail(owner.email, 'Reset your SalonBook password',
+        `Hi ${owner.name},\n\nUse this link to choose a new SalonBook password. It works once and expires in 1 hour.\n\n${link}\n\nIf you didn't ask for this, ignore this email and your password stays the same.\n\n— SalonBook`)
+        .catch((e) => console.error('Reset email failed:', e.message));
+    }
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/reset', limit('reset', 10, 3600e3), (req, res) => {
+  const p = verify(str(req.body?.token, 600));
+  const owner = p && p.n === 'pw' ? db.prepare('SELECT * FROM owners WHERE id = ?').get(p.oid) : null;
+  if (!owner || p.m !== pwMark(owner)) return bad(res, 'This reset link has expired or was already used. Ask for a new one.', 410);
+  const pw = String(req.body?.password || '');
+  if (pw.length < 8) return bad(res, 'Password must be at least 8 characters.');
+  db.prepare('UPDATE owners SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(pw, 10), owner.id);
+  setSession(res, owner.id);
+  res.json({ ok: true });
+});
 
 // ---------- public booking API (no login) ----------
 const getSalonBySlug = (slug) => db.prepare('SELECT * FROM salons WHERE slug = ?').get(str(slug, 60));
@@ -226,8 +277,12 @@ app.get('/api/public/:slug/appointments/:code', (req, res) => {
   const salon = getSalonBySlug(req.params.slug);
   if (!salon) return bad(res, 'Salon not found.', 404);
   expireStaleHolds();
+  // Booking codes are short, so cap wrong guesses per address (valid lookups are unlimited: the page polls).
+  const now = Date.now(), missKey = `codemiss:${req.ip}`;
+  const misses = (hits.get(missKey) || []).filter((t) => now - t < 3600e3);
+  if (misses.length >= 30) return bad(res, 'Too many attempts. Please wait a bit and try again.', 429);
   const a = db.prepare('SELECT * FROM appointments WHERE code = ? AND salon_id = ?').get(str(req.params.code, 12).toUpperCase(), salon.id);
-  if (!a) return bad(res, 'Booking not found.', 404);
+  if (!a) { misses.push(now); hits.set(missKey, misses); return bad(res, 'Booking not found.', 404); }
   res.json({
     appointment: { code: a.code, service: a.service_name, start: a.start_local, end: a.end_local, deposit: a.deposit, price: a.price, status: a.status, clientName: a.client_name },
     salon: publicSalon(salon),
@@ -537,8 +592,32 @@ app.post('/api/google/disconnect', requireOwner, (req, res) => {
 });
 
 // ---------- pages ----------
+// Privacy policy and terms (linked from the sign-in and booking pages, and from Google's OAuth consent screen).
+// Templates live in legal/ (outside public/) so the {{placeholders}} are never served raw.
+const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const OPERATOR_NAME = str(process.env.OPERATOR_NAME);
+const CONTACT_EMAIL = str(process.env.CONTACT_EMAIL);
+const legalPage = (file) => {
+  const html = fs.readFileSync(path.join(__dirname, 'legal', file), 'utf8')
+    .replaceAll('{{SITE}}', escHtml(BASE_URL.replace(/^https?:\/\//, '')))
+    .replaceAll('{{OPERATED_BY}}', OPERATOR_NAME ? ` It is operated by ${escHtml(OPERATOR_NAME)}.` : '')
+    .replaceAll('{{CONTACT}}', CONTACT_EMAIL
+      // email_off: stops Cloudflare's email obfuscation, which shows "[email protected]" to readers without JavaScript (Google's reviewers included)
+      ? `<!--email_off--><a href="mailto:${escHtml(CONTACT_EMAIL)}">${escHtml(CONTACT_EMAIL)}</a><!--/email_off-->.`
+      : 'reply to any email SalonBook has sent you, or ask the salon you booked with to pass your request on.');
+  return (req, res) => res.type('html').send(html);
+};
+app.get('/privacy', legalPage('privacy.html'));
+app.get('/terms', legalPage('terms.html'));
 app.get('/s/:slug', (req, res) => res.sendFile(path.join(__dirname, 'public', 'book.html')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', (req, res) => bad(res, 'Not found.', 404));
+// Never send stack traces to the browser (Express does by default outside NODE_ENV=production).
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const code = err.status >= 400 && err.status < 500 ? err.status : 500;
+  if (code === 500) console.error(err);
+  res.status(code).json({ error: code === 500 ? 'Something went wrong. Please try again.' : 'That request could not be read.' });
+});
 
 app.listen(PORT, () => console.log(`SalonBook running at ${BASE_URL} (Google sync ${google.enabled() ? 'ON' : 'OFF – set GOOGLE_CLIENT_ID/SECRET'}, email ${emailEnabled() ? 'ON' : 'OFF – set SMTP_*'})`));

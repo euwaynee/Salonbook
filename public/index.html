@@ -35,6 +35,17 @@
           <input id="in-pass" type="password" autocomplete="current-password" required>
           <div class="err" id="err-in" role="alert"></div>
           <button type="submit">Sign in</button>
+          <p class="muted"><a href="#forgot" id="link-forgot">Forgot your password?</a></p>
+        </form>
+
+        <form id="form-forgot" class="hide">
+          <p class="muted">Enter the email you sign in with and we'll send you a link to choose a new password.</p>
+          <label for="fg-email">Email</label>
+          <input id="fg-email" type="email" autocomplete="username" required>
+          <div class="err" id="err-fg" role="alert"></div>
+          <p class="ok-msg hide" id="ok-fg" role="status">If that email has an account, a reset link is on its way. Check your inbox and spam folder; the link lasts 1 hour.</p>
+          <button type="submit">Email me a reset link</button>
+          <p class="muted"><a href="#" id="link-back">Back to sign in</a></p>
         </form>
 
         <form id="form-up" class="hide">
@@ -53,6 +64,7 @@
           <div class="err" id="err-up" role="alert"></div>
           <button type="submit">Create my salon</button>
         </form>
+        <p class="muted legal-links"><a href="/privacy">Privacy policy</a> · <a href="/terms">Terms of service</a></p>
       </div>
     </section>
   </div>
@@ -63,12 +75,16 @@ const $ = (id) => document.getElementById(id);
 function show(which) {
   $('form-in').classList.toggle('hide', which !== 'in');
   $('form-up').classList.toggle('hide', which !== 'up');
-  $('tab-in').classList.toggle('on', which === 'in');
+  $('form-forgot').classList.toggle('hide', which !== 'forgot');
+  $('tab-in').classList.toggle('on', which !== 'up');
   $('tab-up').classList.toggle('on', which === 'up');
 }
 $('tab-in').onclick = () => show('in');
 $('tab-up').onclick = () => show('up');
+$('link-forgot').onclick = (e) => { e.preventDefault(); $('fg-email').value = $('in-email').value; show('forgot'); };
+$('link-back').onclick = (e) => { e.preventDefault(); show('in'); };
 if (location.hash === '#register') show('up');
+if (location.hash === '#forgot') show('forgot');
 
 async function post(url, body) {
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -83,6 +99,11 @@ $('form-in').onsubmit = async (e) => {
   e.preventDefault(); $('err-in').textContent = '';
   try { await post('/api/auth/login', { email: $('in-email').value, password: $('in-pass').value }); location.href = '/admin.html'; }
   catch (x) { $('err-in').textContent = x.message; }
+};
+$('form-forgot').onsubmit = async (e) => {
+  e.preventDefault(); $('err-fg').textContent = ''; $('ok-fg').classList.add('hide');
+  try { await post('/api/auth/forgot', { email: $('fg-email').value }); $('ok-fg').classList.remove('hide'); }
+  catch (x) { $('err-fg').textContent = x.message; }
 };
 $('form-up').onsubmit = async (e) => {
   e.preventDefault(); $('err-up').textContent = '';

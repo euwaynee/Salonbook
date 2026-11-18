@@ -74,6 +74,14 @@ The manual flow (client sends to your MMG number and types the transaction ID) s
 
 Owners get an email when a client books, reports a manual MMG payment, or pays through MMG checkout. Configure SMTP in `.env` (see `.env.example`; for Gmail use an App Password). Each owner can turn their own emails on or off, and send a test, under Settings → Notifications. Notification channels live in `notify.js`, so WhatsApp/SMS can be added there later.
 
+## Forgotten passwords
+
+**Forgot your password?** on the sign-in page emails a one-time link (valid 1 hour) to choose a new password. It needs SMTP set up as above. Without email, reset from the server's shell: `node reset-password.js <email>`.
+
+## Privacy policy and terms
+
+`/privacy` and `/terms` are served from the templates in `legal/` and are the links to give Google on the OAuth consent screen (authorized domain: the top-level domain of `BASE_URL`). Set `OPERATOR_NAME` and `CONTACT_EMAIL` in `.env` to show who runs the server and how to reach them. Keep the *Google user data* section in step with what `google.js` actually does.
+
 ## Not included (ideas for next)
 
-SMS/WhatsApp notifications, client emails, per-stylist calendars, client self-cancel/reschedule, password reset by email, deposit refunds.
+SMS/WhatsApp notifications, client emails, per-stylist calendars, client self-cancel/reschedule, deposit refunds.

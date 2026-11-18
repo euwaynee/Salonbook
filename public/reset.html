@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Choose a new password · SalonBook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="auth">
+  <div class="container">
+    <section class="auth-field">
+      <a class="wordmark" href="/" aria-label="SalonBook home">SalonBook</a>
+      <div>
+        <h1>Choose a new password.</h1>
+        <p class="lead">Pick something you haven't used here before. You'll be signed in straight away.</p>
+      </div>
+    </section>
+
+    <section class="auth-panel" aria-label="Choose a new password">
+      <div>
+        <form id="form-reset">
+          <label for="rs-pass">New password (8+ characters)</label>
+          <input id="rs-pass" type="password" autocomplete="new-password" minlength="8" required>
+          <label for="rs-pass2">Repeat it</label>
+          <input id="rs-pass2" type="password" autocomplete="new-password" minlength="8" required>
+          <div class="err" id="err-rs" role="alert"></div>
+          <button type="submit">Save new password</button>
+        </form>
+        <p class="muted"><a href="/#forgot">Send me a new reset link</a> · <a href="/">Back to sign in</a></p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+// The token rides in the #fragment, which browsers never send to the server or to other sites.
+const token = location.hash.slice(1);
+history.replaceState(null, '', location.pathname);
+if (!token) { $('form-reset').classList.add('hide'); document.querySelector('.auth-panel .muted').insertAdjacentHTML('beforebegin', '<p class="err">This page only works from the link in your reset email.</p>'); }
+
+$('form-reset').onsubmit = async (e) => {
+  e.preventDefault(); $('err-rs').textContent = '';
+  if ($('rs-pass').value !== $('rs-pass2').value) { $('err-rs').textContent = 'The two passwords do not match.'; return; }
+  const r = await fetch('/api/auth/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password: $('rs-pass').value }) });
+  const d = await r.json().catch(() => ({}));
+  if (r.ok) location.href = '/admin.html';
+  else $('err-rs').textContent = d.error || 'Something went wrong.';
+};
+</script>
+</body>
+</html>
