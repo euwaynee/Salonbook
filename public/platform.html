@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SalonBook platform</title>
+<meta name="description" content="Stats across every salon on this SalonBook server.">
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--space-md); }
+  .kpi { padding: var(--space-md) var(--space-lg); border: 1px solid var(--color-rule); border-radius: var(--radius-card); }
+  .kpi dt { font-size: var(--text-sm); color: var(--color-muted); }
+  .kpi dd { margin: var(--space-2xs) 0 0; font-family: var(--font-display); font-size: var(--text-2xl); line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .kpi .sub { display: block; margin-top: var(--space-2xs); font-family: inherit; font-size: var(--text-xs); color: var(--color-muted); }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: var(--space-lg); }
+  .chart { position: relative; padding: var(--space-md) var(--space-lg) var(--space-sm); border: 1px solid var(--color-rule); border-radius: var(--radius-card); }
+  .chart h2 { font-size: var(--text-lg); margin: 0; }
+  .chart svg { display: block; width: 100%; height: auto; margin-top: var(--space-sm); overflow: visible; }
+  .chart .bar { fill: var(--color-accent); }
+  .chart .hit { fill: transparent; cursor: default; outline: none; }
+  .chart .bar.on { fill: var(--color-accent-2); }
+  .chart .hit:focus-visible { stroke: var(--color-focus); stroke-width: 2; }
+  .chart .grid { stroke: var(--color-rule); stroke-width: 1; }
+  .chart .axis { fill: var(--color-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .chart .zero { fill: var(--color-muted); font-size: 13px; }
+  .tip { position: absolute; pointer-events: none; padding: var(--space-2xs) var(--space-xs); border-radius: var(--radius-input); background: var(--color-ink); color: var(--color-paper); font-size: var(--text-xs); white-space: nowrap; transform: translate(-50%, calc(-100% - 6px)); }
+  .chart details { margin-top: var(--space-xs); }
+  .chart details summary { cursor: pointer; }
+  .statuses { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-top: var(--space-sm); }
+  .table-scroll { overflow-x: auto; margin-top: var(--space-sm); }
+  table.svcs.wide { min-width: 60rem; font-size: var(--text-sm); }
+  table.svcs .r { text-align: right; padding-right: var(--space-md); font-variant-numeric: tabular-nums; }
+  table.svcs th.r { padding-right: var(--space-md); }
+  table.svcs td small { display: block; color: var(--color-muted); }
+  .section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-xs); }
+  .section-head h2 { margin: 0; }
+</style>
+</head>
+<body class="app">
+<header class="top"><div class="wrap">
+  <h1>SalonBook platform</h1>
+  <div class="top-actions">
+    <a class="btn small" href="/admin.html">My salon</a>
+    <button id="logout" type="button" class="small">Sign out</button>
+  </div>
+</div></header>
+
+<main class="wrap dash" id="main">
+  <p class="muted" id="loading">Loading stats…</p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const n = (v) => Number(v || 0).toLocaleString('en-US');
+const money = (v) => 'GYD ' + Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 0 });
+const utc = (ts) => (ts ? new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z') : null);
+const day = (ts) => (ts ? utc(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
+const short = (iso) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const STATUS = { pending_payment: 'Awaiting payment', payment_submitted: 'Payment reported', confirmed: 'Confirmed', cancelled: 'Cancelled', expired: 'Expired' };
+
+$('logout').onclick = async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.href = '/'; };
+
+// One series per chart, so no legend: the title names it. Hover or focus a week for its value.
+function barChart(title, unit, weeks, key) {
+  const W = 600, H = 170, top = 14, bottom = 24, left = 28, plotH = H - top - bottom;
+  const vals = weeks.map((w) => w[key]), max = Math.max(...vals);
+  const niceMax = max <= 4 ? Math.max(max, 1) : Math.ceil(max / 5) * 5;
+  const slot = (W - left) / weeks.length, bw = Math.min(28, slot * 0.6);
+  const y = (v) => top + plotH - (v / niceMax) * plotH;
+  const bars = weeks.map((w, i) => {
+    const v = w[key], x = left + i * slot + (slot - bw) / 2, h = (v / niceMax) * plotH, r = Math.min(4, h, bw / 2);
+    const yTop = top + plotH - h, label = `Week of ${short(w.start)}: ${n(v)} ${unit}`;
+    const shape = h > 0
+      ? `<path class="bar" d="M${x},${top + plotH} V${yTop + r} Q${x},${yTop} ${x + r},${yTop} H${x + bw - r} Q${x + bw},${yTop} ${x + bw},${yTop + r} V${top + plotH} Z"></path>`
+      : `<path class="bar"></path>`;
+    // The hit area goes after the bar so it sits on top and is bigger than the bar.
+    return `${shape}<rect class="hit" x="${left + i * slot}" y="${top}" width="${slot}" height="${plotH}" tabindex="0" role="img" aria-label="${esc(label)}" data-tip="${esc(label)}" data-x="${x + bw / 2}" data-y="${h > 0 ? yTop : top + plotH}"></rect>`;
+  }).join('');
+  const xLabels = weeks.map((w, i) => (i % 3 === 0 || i === weeks.length - 1)
+    ? `<text class="axis" x="${left + i * slot + slot / 2}" y="${H - 6}" text-anchor="middle">${i === weeks.length - 1 ? 'This week' : short(w.start)}</text>` : '').join('');
+  const svg = `<svg viewBox="0 0 ${W} ${H}">
+    <line class="grid" x1="${left}" x2="${W}" y1="${y(niceMax)}" y2="${y(niceMax)}"></line>
+    <line class="grid" x1="${left}" x2="${W}" y1="${y(niceMax / 2)}" y2="${y(niceMax / 2)}"></line>
+    <line class="grid" x1="${left}" x2="${W}" y1="${top + plotH}" y2="${top + plotH}"></line>
+    <text class="axis" x="${left - 6}" y="${y(niceMax) + 4}" text-anchor="end">${n(niceMax)}</text>
+    <text class="axis" x="${left - 6}" y="${top + plotH + 4}" text-anchor="end">0</text>
+    ${bars}${xLabels}
+    ${max === 0 ? `<text class="zero" x="${(W + left) / 2}" y="${top + plotH / 2}" text-anchor="middle">None in the last 12 weeks</text>` : ''}
+  </svg>`;
+  const rows = weeks.map((w) => `<tr><td>${short(w.start)}</td><td class="r">${n(w[key])}</td></tr>`).join('');
+  return `<section class="chart" aria-label="${esc(title)}"><h2>${esc(title)}</h2>
+    <p class="muted">${n(vals.reduce((a, b) => a + b, 0))} in the last 12 weeks</p>${svg}<div class="tip hide"></div>
+    <details><summary class="muted">Show as table</summary>
+      <table class="svcs"><thead><tr><th>Week starting</th><th class="r">${esc(unit[0].toUpperCase() + unit.slice(1))}</th></tr></thead><tbody>${rows}</tbody></table></details></section>`;
+}
+function wireTips(root) {
+  for (const chart of root.querySelectorAll('.chart')) {
+    const svg = chart.querySelector('svg'), tip = chart.querySelector('.tip');
+    const show = (hit) => {
+      const box = svg.getBoundingClientRect(), cb = chart.getBoundingClientRect(), k = box.width / svg.viewBox.baseVal.width;
+      tip.textContent = hit.dataset.tip; tip.classList.remove('hide'); hit.previousElementSibling.classList.add('on');
+      tip.style.left = `${box.left - cb.left + hit.dataset.x * k}px`; tip.style.top = `${box.top - cb.top + hit.dataset.y * k}px`;
+    };
+    const hide = (hit) => { tip.classList.add('hide'); hit.previousElementSibling.classList.remove('on'); };
+    for (const hit of chart.querySelectorAll('.hit')) {
+      hit.addEventListener('mouseenter', () => show(hit)); hit.addEventListener('focus', () => show(hit));
+      hit.addEventListener('mouseleave', () => hide(hit)); hit.addEventListener('blur', () => hide(hit));
+    }
+  }
+}
+
+function mmgCell(s) {
+  if (s.mmgOn) return s.mmgMode === 'live' ? '<span class="badge b-confirmed">Checkout live</span>' : '<span class="badge b-pending_payment">Checkout sandbox</span>';
+  return s.manualMmg ? '<span class="muted">Manual only</span>' : '<span class="muted">Not set up</span>';
+}
+function uptime(sec) {
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+async function load() {
+  const r = await fetch('/api/platform/stats');
+  if (r.status === 401) { location.href = '/'; return; }
+  if (!r.ok) {
+    $('main').innerHTML = `<div class="card"><h2>No access</h2><p>This page is only for platform admins. Add your email to <span class="code">PLATFORM_ADMINS</span> in the server’s <span class="code">.env</span> and restart SalonBook.</p><p><a href="/admin.html">Back to my salon</a></p></div>`;
+    return;
+  }
+  const d = await r.json(), t = d.totals, sys = d.system;
+  const backupAge = sys.lastBackup ? (Date.now() - Date.parse(sys.lastBackup)) / 36e5 : null;
+  const statusBadges = Object.keys(STATUS).map((k) => `<span class="badge b-${k}">${STATUS[k]}: ${n(d.byStatus[k])}</span>`).join('');
+  const salonRows = d.salons.map((s) => `<tr>
+      <td><b>${esc(s.name)}</b><small><a href="${esc(s.url)}" target="_blank" rel="noopener">/s/${esc(s.slug)}</a></small></td>
+      <td>${esc(s.owners || '—')}<small>${s.google ? `Google Calendar: ${s.google} connected` : 'No Google Calendar'}</small></td>
+      <td>${day(s.createdAt)}</td>
+      <td class="r">${n(s.services)}</td>
+      <td class="r">${n(s.bookings30)}</td>
+      <td class="r">${n(s.bookings)}</td>
+      <td class="r">${n(s.confirmed)}${s.awaitingOwner ? `<small>${n(s.awaitingOwner)} to check</small>` : ''}</td>
+      <td class="r">${money(s.deposits)}</td>
+      <td>${day(s.lastBooking)}</td>
+      <td>${mmgCell(s)}</td>
+    </tr>`).join('');
+
+  $('main').innerHTML = `
+    <section aria-label="Totals">
+      <dl class="kpis">
+        <div class="kpi"><dt>Salons</dt><dd>${n(t.salons)}<span class="sub">${n(t.salons30)} new in 30 days · ${n(t.owners)} owner logins</span></dd></div>
+        <div class="kpi"><dt>Bookings, last 30 days</dt><dd>${n(t.bookings30)}<span class="sub">${n(t.bookings)} all time</span></dd></div>
+        <div class="kpi"><dt>Confirmed bookings</dt><dd>${n(t.confirmed)}<span class="sub">${n(t.paidByMmg)} paid through MMG checkout</span></dd></div>
+        <div class="kpi"><dt>Deposits confirmed</dt><dd>${money(t.deposits)}<span class="sub">of ${money(t.value)} in confirmed bookings</span></dd></div>
+        <div class="kpi"><dt>MMG checkout on</dt><dd>${n(t.mmgLive)} live<span class="sub">${n(t.mmgSandbox)} in sandbox · ${n(t.googleOwners)} on Google Calendar</span></dd></div>
+      </dl>
+    </section>
+
+    <div class="charts">
+      ${barChart('Bookings per week', 'bookings', d.weeks, 'bookings')}
+      ${barChart('New salons per week', 'new salons', d.weeks, 'signups')}
+    </div>
+
+    <section>
+      <h2>Bookings by status</h2>
+      <div class="statuses">${statusBadges}</div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Salons</h2><span class="muted">Busiest in the last 30 days first</span></div>
+      ${d.salons.length ? `<div class="table-scroll"><table class="svcs wide">
+        <thead><tr><th>Salon</th><th>Owners</th><th>Joined</th><th class="r">Services</th><th class="r">30 days</th><th class="r">All bookings</th><th class="r">Confirmed</th><th class="r">Deposits</th><th>Last booking</th><th>MMG</th></tr></thead>
+        <tbody>${salonRows}</tbody></table></div>` : '<p class="empty">No salons yet.</p>'}
+    </section>
+
+    <section>
+      <h2>Server</h2>
+      <dl class="facts">
+        <div><dt>Address</dt><dd>${esc(sys.baseUrl)}</dd></div>
+        <div><dt>Running for</dt><dd>${uptime(sys.uptimeSec)}</dd></div>
+        <div><dt>Database size</dt><dd>${(sys.dbBytes / 1048576).toFixed(1)} MB</dd></div>
+        <div><dt>Last backup</dt><dd>${sys.lastBackup ? `${utc(sys.lastBackup).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}${backupAge > 30 ? ' <span class="badge b-pending_payment">Over a day old</span>' : ''}` : '<span class="badge b-pending_payment">None found</span>'}</dd></div>
+        <div><dt>Sign-up</dt><dd>${sys.signup === 'open' ? 'Open to anyone' : 'Needs registration code'}</dd></div>
+        <div><dt>Email notifications</dt><dd>${sys.email ? 'On' : 'Off (SMTP not set)'}</dd></div>
+        <div><dt>Google Calendar sync</dt><dd>${sys.google ? 'Available' : 'Off (Google keys not set)'}</dd></div>
+        <div><dt>Node.js</dt><dd>${esc(sys.node)}</dd></div>
+      </dl>
+      <p class="muted">Updated ${utc(d.generatedAt).toLocaleTimeString('en-GB', { timeStyle: 'short' })}. <a href="#" id="reload">Refresh</a></p>
+    </section>`;
+  wireTips($('main'));
+  $('reload').onclick = (e) => { e.preventDefault(); load(); };
+}
+load().catch(() => { $('main').innerHTML = '<p class="err">Could not load stats. Please refresh.</p>'; });
+</script>
+</body>
+</html>

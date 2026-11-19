@@ -13,7 +13,10 @@
 <body class="app">
 <header class="top"><div class="wrap">
   <h1 id="salon-name">SalonBook</h1>
-  <button id="logout" type="button" class="small">Sign out</button>
+  <div class="top-actions">
+    <a id="platform-link" class="btn small hide" href="/platform.html">Platform</a>
+    <button id="logout" type="button" class="small">Sign out</button>
+  </div>
 </div></header>
 
 <main class="wrap dash">
@@ -495,6 +498,7 @@ $('owner-add').onsubmit = async (e) => {
 // ---------- boot ----------
 (async () => {
   ME = await api('GET', '/api/admin/me');
+  $('platform-link').classList.toggle('hide', !ME.owner.platformAdmin);
   fillSettings(); fillMmg(); renderNotify(); renderGoogle();
   const q = new URLSearchParams(location.search);
   if (q.get('welcome')) $('welcome').classList.remove('hide');

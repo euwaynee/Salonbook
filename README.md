@@ -19,6 +19,13 @@ Requires Node 18+. Data lives in `salonbook.db` (SQLite) — back this file up.
 
 Set `REGISTRATION_CODE` in `.env` if you don't want strangers creating salons on your server.
 
+### Platform (master) account
+
+Put your owner login email in `PLATFORM_ADMINS` in `.env` (comma-separate several) and restart. That login then
+gets a **Platform** button on the dashboard, opening `/platform.html`: totals, bookings and new salons per week,
+every salon with its bookings, deposits and MMG status, and server health (database size, last backup).
+It is read-only and never shows clients' names or phone numbers, or anyone's keys or passwords.
+
 ## How a booking works
 
 1. Client picks service → date → time → enters name/phone. The slot is **held** (default 60 min).

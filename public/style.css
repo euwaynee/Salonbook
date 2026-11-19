@@ -81,8 +81,9 @@ header.top .wrap { display: flex; align-items: center; justify-content: space-be
 header.top h1 { font-size: var(--text-xl); max-width: none; margin: 0; }
 header.top .brand-id { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; }
 header.top .brand-id img { width: 44px; height: 44px; border-radius: var(--radius-input); object-fit: cover; background: var(--color-field); flex: 0 0 auto; }
-header.top button { background: transparent; border-color: color-mix(in oklab, var(--color-accent-ink) 55%, transparent); color: var(--color-accent-ink); }
-header.top button:hover { background: var(--color-accent-2); border-color: var(--color-accent-ink); }
+header.top .top-actions { display: flex; gap: var(--space-xs); flex: 0 0 auto; }
+header.top .btn, header.top button { background: transparent; border-color: color-mix(in oklab, var(--color-accent-ink) 55%, transparent); color: var(--color-accent-ink); }
+header.top .btn:hover, header.top button:hover { background: var(--color-accent-2); border-color: var(--color-accent-ink); }
 header.top :focus-visible { outline-color: var(--color-accent-ink); }
 
 /* app type scale: 1.2, no display sizes */

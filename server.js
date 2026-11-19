@@ -20,6 +20,9 @@ const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 const SECURE_COOKIE = BASE_URL.startsWith('https://');
 const REGISTRATION_CODE = process.env.REGISTRATION_CODE || ''; // optional: restrict who can create a salon
+// Owner emails that can also see the platform-wide stats page. Only settable on the server, never from the web.
+const PLATFORM_ADMINS = new Set(String(process.env.PLATFORM_ADMINS || '').toLowerCase().split(',').map((e) => e.trim()).filter(Boolean));
+const isPlatformAdmin = (owner) => PLATFORM_ADMINS.has(String(owner.email).toLowerCase());
 
 // ---------- session secret (persisted so logins survive restarts) ----------
 const SECRET_FILE = path.join(__dirname, '.session_secret');
@@ -390,7 +393,7 @@ admin.use(requireOwner);
 admin.get('/me', (req, res) => {
   const { salon, owner } = req;
   res.json({
-    owner: { name: owner.name, email: owner.email },
+    owner: { name: owner.name, email: owner.email, platformAdmin: isPlatformAdmin(owner) },
     google: { available: google.enabled(), connected: Boolean(owner.google_refresh_token), email: owner.google_email },
     salon: {
       slug: salon.slug, name: salon.name, phone: salon.phone, address: salon.address, timezone: salon.timezone,
@@ -585,6 +588,77 @@ admin.get('/owners', (req, res) =>
   res.json(db.prepare('SELECT id, name, email, google_email AS googleEmail, google_refresh_token IS NOT NULL AS googleConnected FROM owners WHERE salon_id = ?').all(req.salon.id)));
 
 app.use('/api/admin', admin);
+
+// ---------- platform (master account) API ----------
+// Read-only stats across every salon, for emails listed in PLATFORM_ADMINS. Returns no client details
+// (names, phones, notes) and no secrets (MMG keys, password hashes, Google tokens).
+const platform = express.Router();
+platform.use(requireOwner, (req, res, next) => (isPlatformAdmin(req.owner) ? next() : bad(res, 'Not found.', 404)));
+
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, '..', 'salonbook-backups');
+function lastBackup() {
+  try {
+    const files = fs.readdirSync(BACKUP_DIR).filter((f) => f.endsWith('.db.gz'));
+    const latest = Math.max(...files.map((f) => fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs));
+    return Number.isFinite(latest) ? new Date(latest).toISOString() : null;
+  } catch { return null; }
+}
+function dbBytes() {
+  const file = process.env.DB_PATH || path.join(__dirname, 'salonbook.db');
+  return ['', '-wal'].reduce((n, ext) => { try { return n + fs.statSync(file + ext).size; } catch { return n; } }, 0);
+}
+
+platform.get('/stats', (req, res) => {
+  const one = (sql) => db.prepare(sql).get();
+  const totals = {
+    salons: one('SELECT COUNT(*) n FROM salons').n,
+    salons30: one("SELECT COUNT(*) n FROM salons WHERE created_at >= datetime('now','-30 days')").n,
+    owners: one('SELECT COUNT(*) n FROM owners').n,
+    services: one('SELECT COUNT(*) n FROM services WHERE active = 1').n,
+    bookings: one('SELECT COUNT(*) n FROM appointments').n,
+    bookings30: one("SELECT COUNT(*) n FROM appointments WHERE created_at >= datetime('now','-30 days')").n,
+    ...one(`SELECT COALESCE(SUM(deposit),0) deposits, COALESCE(SUM(price),0) value, COUNT(*) confirmed,
+                   COALESCE(SUM(paid_via = 'mmg'),0) paidByMmg FROM appointments WHERE status = 'confirmed'`),
+    mmgLive: one("SELECT COUNT(*) n FROM salons WHERE mmg_api_enabled = 1 AND mmg_mode = 'live'").n,
+    mmgSandbox: one("SELECT COUNT(*) n FROM salons WHERE mmg_api_enabled = 1 AND mmg_mode <> 'live'").n,
+    googleOwners: one('SELECT COUNT(*) n FROM owners WHERE google_refresh_token IS NOT NULL').n,
+  };
+  const byStatus = Object.fromEntries(db.prepare('SELECT status, COUNT(*) n FROM appointments GROUP BY status').all().map((r) => [r.status, r.n]));
+
+  // Last 12 weeks, oldest first. Week 11 is the 7 days ending now.
+  const WEEKS = 12, weekMs = 7 * 864e5, now = Date.now();
+  const weeks = Array.from({ length: WEEKS }, (_, i) => ({ start: new Date(now - (WEEKS - i) * weekMs).toISOString().slice(0, 10), bookings: 0, signups: 0 }));
+  const bucket = (ts, key) => {
+    const i = WEEKS - 1 - Math.floor((now - Date.parse(`${ts.replace(' ', 'T')}Z`)) / weekMs);
+    if (i >= 0 && i < WEEKS) weeks[i][key]++;
+  };
+  for (const r of db.prepare("SELECT created_at FROM appointments WHERE created_at >= datetime('now','-84 days')").all()) bucket(r.created_at, 'bookings');
+  for (const r of db.prepare("SELECT created_at FROM salons WHERE created_at >= datetime('now','-84 days')").all()) bucket(r.created_at, 'signups');
+
+  const salons = db.prepare(`
+    SELECT s.id, s.slug, s.name, s.created_at AS createdAt, s.mmg_api_enabled AS mmgOn, s.mmg_mode AS mmgMode, s.mmg_number <> '' AS manualMmg,
+      (SELECT group_concat(o.email, ', ') FROM owners o WHERE o.salon_id = s.id) AS owners,
+      (SELECT COUNT(*) FROM owners o WHERE o.salon_id = s.id AND o.google_refresh_token IS NOT NULL) AS google,
+      (SELECT COUNT(*) FROM services v WHERE v.salon_id = s.id AND v.active = 1) AS services,
+      COUNT(a.id) AS bookings,
+      COALESCE(SUM(a.created_at >= datetime('now','-30 days')),0) AS bookings30,
+      COALESCE(SUM(a.status = 'confirmed'),0) AS confirmed,
+      COALESCE(SUM(a.status = 'payment_submitted'),0) AS awaitingOwner,
+      COALESCE(SUM(CASE WHEN a.status = 'confirmed' THEN a.deposit END),0) AS deposits,
+      MAX(a.created_at) AS lastBooking
+    FROM salons s LEFT JOIN appointments a ON a.salon_id = s.id
+    GROUP BY s.id ORDER BY bookings30 DESC, s.created_at DESC`).all()
+    .map((s) => ({ ...s, url: `${BASE_URL}/s/${s.slug}`, mmgOn: Boolean(s.mmgOn), manualMmg: Boolean(s.manualMmg) }));
+
+  res.json({
+    generatedAt: new Date().toISOString(), totals, byStatus, weeks, salons,
+    system: {
+      baseUrl: BASE_URL, node: process.version, uptimeSec: Math.round(process.uptime()), dbBytes: dbBytes(), lastBackup: lastBackup(),
+      email: emailEnabled(), google: google.enabled(), signup: REGISTRATION_CODE ? 'code' : 'open', platformAdmins: PLATFORM_ADMINS.size,
+    },
+  });
+});
+app.use('/api/platform', platform);
 
 // ---------- Google Calendar OAuth ----------
 app.get('/api/google/connect', requireOwner, (req, res) => {
