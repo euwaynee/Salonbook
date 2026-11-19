@@ -20,6 +20,7 @@
   <div id="flow" class="hide">
     <aside class="flow-side">
       <p class="muted" id="salon-info"></p>
+      <p class="muted hide" id="closed-days"></p>
       <div class="steps"><span class="on" id="st1">1 Service</span><span id="st2">2 Time</span><span id="st3">3 Your details</span></div>
     </aside>
 
@@ -42,7 +43,7 @@
       <div class="muted" id="summary"></div>
       <label for="c-name">Full name</label><input id="c-name" autocomplete="name" required maxlength="80">
       <label for="c-phone">Phone / WhatsApp</label><input id="c-phone" type="tel" autocomplete="tel" required maxlength="30">
-      <label for="c-email">Email <span class="muted">(optional)</span></label><input id="c-email" type="email" autocomplete="email" maxlength="120">
+      <label for="c-email">Email <span class="muted" id="email-hint">(optional)</span></label><input id="c-email" type="email" autocomplete="email" maxlength="120">
       <label for="c-notes">Anything we should know? <span class="muted">(optional)</span></label><textarea id="c-notes" rows="2" maxlength="300"></textarea>
       <div class="err" id="err-book" role="alert"></div>
       <button type="submit" id="book-btn">Continue to payment</button>
@@ -109,8 +110,9 @@ async function loadSlots() {
   if (!sel.service || !sel.date) { $('slots').innerHTML = ''; $('slot-msg').textContent = 'Choose a date to see available times.'; return; }
   $('slots').innerHTML = ''; $('slot-msg').textContent = 'Checking availability…';
   try {
-    const { slots } = await call('GET', `${API}/slots?service=${sel.service.id}&date=${sel.date}`);
-    $('slot-msg').textContent = slots.length ? '' : 'No times available that day. Please try another date.';
+    const { slots, closed } = await call('GET', `${API}/slots?service=${sel.service.id}&date=${sel.date}`);
+    $('slot-msg').textContent = closed ? `The salon is closed that day${closed.note ? ` (${closed.note})` : ''}. Please pick another date.`
+      : slots.length ? '' : 'No times available that day. Please try another date.';
     $('slots').innerHTML = slots.map((t) => `<button type="button" class="chip ${sel.time === t ? 'on' : ''}" data-t="${t}">${fmtTime(t)}</button>`).join('');
   } catch (x) { $('slot-msg').textContent = x.message; }
 }
@@ -262,6 +264,13 @@ async function showStatus(code) {
     applyBrand(SALON);
     $('salon-name').textContent = SALON.name;
     $('salon-info').textContent = [SALON.address, SALON.phone].filter(Boolean).join('\n');
+    const shortDay = (s) => new Date(s + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    if (d.closures?.length) {
+      $('closed-days').innerHTML = '<b>Closed</b>' + d.closures.slice(0, 6).map((c) =>
+        `<br>${esc(shortDay(c.start))}${c.end !== c.start ? ` to ${esc(shortDay(c.end))}` : ''}${c.note ? ` · ${esc(c.note)}` : ''}`).join('');
+      $('closed-days').classList.remove('hide');
+    }
+    if (SALON.clientEmails) $('email-hint').textContent = `(optional: we’ll email your confirmation${SALON.reminderHours ? ' and a reminder' : ''})`;
     $('date').min = today;
     $('loading').classList.add('hide');
     const code = new URLSearchParams(location.search).get('code');

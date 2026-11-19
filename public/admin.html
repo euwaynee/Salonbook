@@ -154,6 +154,25 @@
       <div class="save-bar"><button type="submit">Save settings</button> <span id="saved" class="ok-msg"></span></div>
     </form>
 
+    <div class="set">
+      <header>
+        <h3>Closed days</h3>
+        <p class="muted">Holidays and days off. Clients can’t book these days, and your booking page lists them. Bookings you already have on those days are kept, so contact those clients.</p>
+      </header>
+      <div>
+        <form id="closure-form">
+          <div class="row">
+            <div><label for="c-start">From</label><input id="c-start" type="date" required></div>
+            <div><label for="c-end">To <span class="muted">(blank = one day)</span></label><input id="c-end" type="date"></div>
+            <div><label for="c-note">Reason <span class="muted">(optional, shown to clients)</span></label><input id="c-note" maxlength="80" placeholder="Christmas"></div>
+          </div>
+          <div class="err" id="err-closure" role="alert"></div>
+          <div class="save-bar"><button type="submit" class="ghost">Add closed days</button> <span id="c-msg" class="ok-msg"></span></div>
+        </form>
+        <div id="closure-list"></div>
+      </div>
+    </div>
+
     <form class="set" id="mmg-form">
       <header>
         <h3>MMG online payments</h3>
@@ -207,6 +226,25 @@
         <label for="p-secret">Secret</label><input id="p-secret" type="password" maxlength="200" autocomplete="new-password">
         <div class="err" id="err-payopt" role="alert"></div>
         <div class="save-bar"><button type="submit">Save payment options</button> <span id="p-saved" class="ok-msg"></span></div>
+      </div>
+    </form>
+
+    <form class="set" id="client-email-form">
+      <header>
+        <h3>Emails to clients</h3>
+        <p class="muted">Sent to clients who give an email when booking: a confirmation when their booking is confirmed, a reminder before the appointment, and a note if you cancel. Replies aren’t read, so the emails give your phone number.</p>
+      </header>
+      <div>
+        <p class="muted hide" id="ce-off">Email isn’t set up on this server, so these can’t be sent yet.</p>
+        <label class="check"><input type="checkbox" id="ce-on"> Email clients about their bookings</label>
+        <label for="ce-hours">Reminder</label>
+        <select id="ce-hours">
+          <option value="0">No reminder</option><option value="2">2 hours before</option><option value="12">12 hours before</option>
+          <option value="24">1 day before</option><option value="48">2 days before</option>
+        </select>
+        <p class="muted">Clients without email: use the <b>WhatsApp reminder</b> button on a confirmed appointment to send them a ready-written message from your phone.</p>
+        <div class="err" id="err-ce" role="alert"></div>
+        <div class="save-bar"><button type="submit">Save</button> <span id="ce-saved" class="ok-msg"></span></div>
       </div>
     </form>
 
@@ -277,6 +315,14 @@ $('copy-link').onclick = async () => {
 function fmtDay(d) { return new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }); }
 function fmtTime(t) { const [h, m] = t.split(':').map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; }
 
+// Ready-written reminder the owner sends from their own WhatsApp (free; works for clients without email).
+function waReminder(a) {
+  const s = ME.salon, owed = a.payMethod === 'cash' ? a.price : a.price - a.deposit;
+  return `Hi ${a.clientName.split(' ')[0]}, this is ${s.name}. A reminder of your ${a.service} appointment on ${fmtDay(a.start.slice(0, 10))} at ${fmtTime(a.start.slice(11))}.`
+    + (owed > 0 ? ` Balance to pay at the salon: ${money(owed)}.` : '')
+    + (s.address ? ` We're at ${s.address}.` : '') + ' Reply here if you need to change anything. See you then!';
+}
+
 async function loadAppts() {
   const f = $('appt-filter').value;
   let list = await api('GET', '/api/admin/appointments');
@@ -310,7 +356,7 @@ async function loadAppts() {
         ${['pending_payment', 'payment_submitted'].includes(a.status) ? `<button type="button" class="small" data-act="confirm" data-id="${a.id}" data-method="${esc(a.payMethod)}">${a.payMethod === 'cash' ? 'Confirm cash booking' : 'Payment received: confirm'}</button>` : ''}
         ${['pending_payment', 'payment_submitted', 'confirmed'].includes(a.status) ? `<button type="button" class="small danger" data-act="cancel" data-id="${a.id}">Cancel</button>` : ''}
         <a class="btn ghost small" href="tel:${esc(tel)}">Call</a>
-        <a class="btn ghost small" target="_blank" rel="noopener" href="https://wa.me/${esc(tel.replace('+', ''))}">WhatsApp</a>
+        <a class="btn ghost small" target="_blank" rel="noopener" href="https://wa.me/${esc(tel.replace('+', ''))}${a.status === 'confirmed' ? `?text=${encodeURIComponent(waReminder(a))}` : ''}">${a.status === 'confirmed' ? 'WhatsApp reminder' : 'WhatsApp'}</a>
       </div></article>`;
   }
   box.innerHTML = html;
@@ -431,6 +477,43 @@ $('print-poster').onclick = () => {
   <p class="foot">Secure your time with a small MMG deposit</p>
   <script>onload=()=>setTimeout(()=>print(),500)<\/script>`);
   w.document.close();
+};
+
+// ---------- closed days ----------
+const dayLabel = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+async function loadClosures() {
+  const list = await api('GET', '/api/admin/closures');
+  $('closure-list').innerHTML = list.length ? `<table class="svcs"><tbody>${list.map((c) => `<tr>
+      <td>${esc(dayLabel(c.start))}${c.end !== c.start ? ` to ${esc(dayLabel(c.end))}` : ''}</td>
+      <td>${c.note ? esc(c.note) : '<span class="muted">No reason given</span>'}</td>
+      <td class="c-act"><button type="button" class="small danger" data-del-closure="${c.id}">Remove</button></td></tr>`).join('')}</tbody></table>`
+    : '<p class="muted">No closed days coming up.</p>';
+}
+$('closure-form').onsubmit = async (e) => {
+  e.preventDefault(); $('err-closure').textContent = ''; $('c-msg').textContent = '';
+  try {
+    const r = await api('POST', '/api/admin/closures', { start: $('c-start').value, end: $('c-end').value, note: $('c-note').value });
+    $('c-start').value = ''; $('c-end').value = ''; $('c-note').value = '';
+    $('c-msg').textContent = r.affected ? `Added. You have ${r.affected} booking${r.affected > 1 ? 's' : ''} on those days; they were kept, so contact the client${r.affected > 1 ? 's' : ''}.` : 'Added';
+    await loadClosures();
+  } catch (x) { $('err-closure').textContent = x.message; }
+};
+$('closure-list').onclick = async (e) => {
+  const b = e.target.closest('[data-del-closure]'); if (!b) return;
+  try { await api('DELETE', '/api/admin/closures/' + b.dataset.delClosure); await loadClosures(); } catch (x) { alert(x.message); }
+};
+
+// ---------- emails to clients ----------
+function fillClientEmails() {
+  $('ce-on').checked = ME.clientEmails.enabled; $('ce-hours').value = String(ME.clientEmails.reminderHours);
+  $('ce-off').classList.toggle('hide', ME.notify.emailAvailable);
+}
+$('client-email-form').onsubmit = async (e) => {
+  e.preventDefault(); $('err-ce').textContent = ''; $('ce-saved').textContent = '';
+  try {
+    await api('PUT', '/api/admin/client-emails', { enabled: $('ce-on').checked, reminderHours: Number($('ce-hours').value) });
+    ME = await api('GET', '/api/admin/me'); fillClientEmails(); $('ce-saved').textContent = 'Saved';
+  } catch (x) { $('err-ce').textContent = x.message; }
 };
 
 // ---------- cash + PayPal ----------
@@ -571,14 +654,14 @@ function renderVerify(flag) {
   try { ME = await api('GET', '/api/admin/me'); }
   catch (x) { $('main').innerHTML = `<div class="card"><h2>Can’t open your dashboard</h2><p>${esc(x.message)}</p></div>`; return; }
   $('platform-link').classList.toggle('hide', !ME.owner.platformAdmin);
-  fillSettings(); fillMmg(); fillPayments(); renderNotify(); renderGoogle();
+  fillSettings(); fillMmg(); fillPayments(); fillClientEmails(); renderNotify(); renderGoogle();
   const q = new URLSearchParams(location.search);
   renderVerify(q.get('verified'));
   if (q.get('verified')) history.replaceState(null, '', '/admin.html' + (q.get('welcome') ? '?welcome=1' : ''));
   if (q.get('welcome')) $('welcome').classList.remove('hide');
   const gmsg = { connected: 'Google Calendar connected.', error: 'Google connection failed. Please try again.', unconfigured: 'Google sync is not configured on this server.' }[q.get('google')];
   if (gmsg) { alert(gmsg); history.replaceState(null, '', '/admin.html'); }
-  await Promise.all([loadAppts(), loadServices(), loadOwners()]);
+  await Promise.all([loadAppts(), loadServices(), loadOwners(), loadClosures()]);
 })();
 </script>
 </body>

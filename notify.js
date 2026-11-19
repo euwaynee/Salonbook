@@ -102,4 +102,43 @@ function notify(event, salon, appt, opts = {}) {
   });
 }
 
-module.exports = { notify, emailEnabled, sendMail };
+// ---------- emails to the client ----------
+// Sent only when the client gave an email and the salon has client emails on. Replies aren't read, so every
+// email points the client to the salon's phone instead.
+const CLIENT_TEMPLATES = {
+  confirmed: (a, s) => ({
+    subject: `You're booked at ${s.name}: ${when(a.start_local)}`,
+    lead: 'Your appointment is confirmed. See you then!',
+  }),
+  reminder: (a, s) => ({
+    subject: `Reminder: ${a.service_name} at ${s.name}, ${when(a.start_local)}`,
+    lead: 'A reminder of your upcoming appointment.',
+  }),
+  cancelled: (a, s) => ({
+    subject: `Your appointment at ${s.name} was cancelled`,
+    lead: `Your ${a.service_name} appointment on ${when(a.start_local)} has been cancelled by the salon. If you didn't expect this, please contact them.`,
+  }),
+};
+const toPay = (a) => (a.pay_method === 'cash' ? a.price : Math.max(0, a.price - a.deposit));
+
+function notifyClient(kind, salon, a, { link } = {}) {
+  if (!emailEnabled() || !salon.client_emails || !a.client_email) return Promise.resolve(false);
+  const t = CLIENT_TEMPLATES[kind](a, salon);
+  const lines = [
+    `Hi ${a.client_name},`, '', t.lead, '',
+    `Service:  ${a.service_name}`,
+    `When:     ${when(a.start_local)}`,
+    salon.address ? `Where:    ${salon.address}` : null,
+    `Code:     ${a.code}`,
+    kind !== 'cancelled' && toPay(a) > 0 ? `To pay at the salon: ${money(toPay(a))}${a.pay_method === 'cash' ? ' (cash)' : ''}` : null,
+    '',
+    kind !== 'cancelled' && link ? `Your booking: ${link}` : null,
+    salon.phone ? `Need to change something? Contact ${salon.name}: ${salon.phone}` : `Need to change something? Contact ${salon.name}.`,
+    '', `— ${salon.name}, booked through SalonBook. Please don't reply to this email; it isn't read.`,
+  ].filter((l) => l !== null);
+  return mailer().sendMail({
+    from: `"${salon.name.replace(/"/g, '')}" <${SMTP.from}>`, to: a.client_email, subject: t.subject, text: lines.join('\n'),
+  }).then(() => true, (e) => { console.error(`Client email (${kind}) failed:`, e.message); return false; });
+}
+
+module.exports = { notify, notifyClient, emailEnabled, sendMail };

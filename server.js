@@ -16,7 +16,7 @@ const google = require('./google');
 const mmg = require('./mmg');
 const paypal = require('./paypal');
 const { seal, open, migrate: sealStoredSecrets } = require('./secrets');
-const { notify, emailEnabled, sendMail } = require('./notify');
+const { notify, notifyClient, emailEnabled, sendMail } = require('./notify');
 
 const PORT = process.env.PORT || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
@@ -120,8 +120,13 @@ const depositFor = (salon, price) => {
   return Math.max(0, Math.round(d));
 };
 
+// The closure covering this date ('YYYY-MM-DD'), if the salon is closed that day.
+const closureOn = (salonId, date) =>
+  db.prepare('SELECT * FROM closures WHERE salon_id = ? AND start_date <= ? AND end_date >= ? LIMIT 1').get(salonId, date, date);
+
 function slotsFor(salon, service, date) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+  if (closureOn(salon.id, date)) return [];
   const dow = new Date(date + 'T00:00:00Z').getUTCDay();
   const hours = JSON.parse(salon.hours)[dow];
   if (!hours) return [];
@@ -150,6 +155,7 @@ const publicSalon = (s) => ({
   hours: JSON.parse(s.hours), holdMinutes: s.hold_minutes,
   mmg: { number: s.mmg_number, name: s.mmg_name, checkout: mmg.configured(s) },
   cash: Boolean(s.pay_cash),
+  clientEmails: Boolean(s.client_emails) && emailEnabled(), reminderHours: s.reminder_hours,
   paypal: { checkout: paypal.configured(s), me: s.usd_rate > 0 && s.paypal_me ? s.paypal_me : '' },
 });
 const apptOut = (a) => ({
@@ -159,6 +165,15 @@ const apptOut = (a) => ({
   paymentRef: a.payment_ref, paymentSubmittedAt: a.payment_submitted_at, createdAt: a.created_at,
   synced: Boolean(a.google_event_id), paidVia: a.paid_via, payMethod: a.pay_method,
 });
+
+// The client's own booking page (status, payment), used in their emails.
+const clientLink = (salon, a) => `${BASE_URL}/s/${encodeURIComponent(salon.slug)}?code=${encodeURIComponent(a.code)}`;
+// "You're booked" email to the client, at most once per booking however it got confirmed.
+function sendClientConfirmation(salon, a) {
+  if (!a.client_email) return;
+  const claimed = db.prepare("UPDATE appointments SET client_confirm_sent_at = datetime('now') WHERE id = ? AND client_confirm_sent_at IS NULL").run(a.id).changes;
+  if (claimed) notifyClient('confirmed', salon, { ...a, status: 'confirmed' }, { link: clientLink(salon, a) });
+}
 
 // ---------- auth ----------
 function requireOwner(req, res, next) {
@@ -285,7 +300,11 @@ app.get('/api/public/:slug', (req, res) => {
   if (!salon) return;
   const services = db.prepare('SELECT id, name, duration_min, price FROM services WHERE salon_id = ? AND active = 1 ORDER BY name').all(salon.id)
     .map((s) => ({ ...s, deposit: depositFor(salon, s.price) }));
-  res.json({ salon: publicSalon(salon), services, today: nowLocal(salon.timezone).slice(0, 10) });
+  const today = nowLocal(salon.timezone).slice(0, 10);
+  // Upcoming closed days, so the booking page can mention them before the client picks a date.
+  const closures = db.prepare(`SELECT start_date AS start, end_date AS end, note FROM closures
+    WHERE salon_id = ? AND end_date >= ? AND start_date <= date(?, '+120 days') ORDER BY start_date`).all(salon.id, today, today);
+  res.json({ salon: publicSalon(salon), services, today, closures });
 });
 
 app.get('/api/public/:slug/slots', (req, res) => {
@@ -294,7 +313,8 @@ app.get('/api/public/:slug/slots', (req, res) => {
   const service = db.prepare('SELECT * FROM services WHERE id = ? AND salon_id = ? AND active = 1').get(Number(req.query.service), salon.id);
   if (!service) return bad(res, 'Service not found.', 404);
   expireStaleHolds();
-  res.json({ slots: slotsFor(salon, service, str(req.query.date, 10)) });
+  const date = str(req.query.date, 10), closed = /^\d{4}-\d{2}-\d{2}$/.test(date) && closureOn(salon.id, date);
+  res.json({ slots: slotsFor(salon, service, date), closed: closed ? { note: closed.note } : null });
 });
 
 app.post('/api/public/:slug/book', limit('book', 15, 3600e3), (req, res) => {
@@ -310,6 +330,7 @@ app.post('/api/public/:slug/book', limit('book', 15, 3600e3), (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(str(b.date, 10)) || !/^\d{2}:\d{2}$/.test(str(b.time, 5))) return bad(res, 'Please pick a date and time.');
 
   expireStaleHolds();
+  if (closureOn(salon.id, b.date)) return bad(res, 'The salon is closed that day. Please pick another date.', 409);
   // better-sqlite3 is synchronous, so check + insert below cannot interleave with another request.
   if (!slotsFor(salon, service, b.date).includes(b.time)) return bad(res, 'Sorry, that time was just taken. Please pick another.', 409);
 
@@ -400,6 +421,7 @@ function recordGatewayPayment(salon, apptId, via, ref) {
   })();
   if (outcome.after === 'confirmed' && outcome.before !== 'confirmed') {
     notify('paid_online', salon, outcome.appt);
+    sendClientConfirmation(salon, outcome.appt);
     google.syncConfirmed(salon, outcome.appt).catch((e) => console.error('Google sync error', e.message));
   } else if (outcome.after === 'payment_submitted' || outcome.after === 'cancelled') {
     notify('paid_online_conflict', salon, outcome.appt);
@@ -560,6 +582,7 @@ admin.get('/me', (req, res) => {
       responseUrl: `${BASE_URL}/api/mmg/return/${salon.slug}`,
     },
     notify: { emailAvailable: emailEnabled(), email: Boolean(owner.notify_email) },
+    clientEmails: { enabled: Boolean(salon.client_emails), reminderHours: salon.reminder_hours },
   });
 });
 
@@ -628,6 +651,36 @@ admin.put('/payments', limit('payset', 30, 3600e3), async (req, res) => {
   }
   db.prepare(`UPDATE salons SET pay_cash=?, usd_rate=?, paypal_me=?, paypal_enabled=?, paypal_mode=?, paypal_client_id=?, paypal_secret=? WHERE id=?`)
     .run(next.pay_cash, next.usd_rate, next.paypal_me, next.paypal_enabled, next.paypal_mode, next.paypal_client_id, next.paypal_secret, s.id);
+  res.json({ ok: true });
+});
+
+// ---------- closed days ----------
+const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d + 'T00:00:00Z'));
+admin.get('/closures', (req, res) => {
+  const today = nowLocal(req.salon.timezone).slice(0, 10);
+  res.json(db.prepare('SELECT id, start_date AS start, end_date AS end, note FROM closures WHERE salon_id = ? AND end_date >= ? ORDER BY start_date')
+    .all(req.salon.id, today));
+});
+admin.post('/closures', (req, res) => {
+  const start = str(req.body?.start, 10), end = str(req.body?.end, 10) || start, note = str(req.body?.note, 80);
+  if (!isDate(start) || !isDate(end) || end < start) return bad(res, 'Choose a start date, and an end date on or after it.');
+  if ((Date.parse(end) - Date.parse(start)) / 864e5 > 366) return bad(res, 'Closures can be at most a year long.');
+  const id = db.prepare('INSERT INTO closures (salon_id, start_date, end_date, note) VALUES (?,?,?,?)').run(req.salon.id, start, end, note).lastInsertRowid;
+  // Existing bookings on those days are left alone, but the owner should know about them.
+  const affected = db.prepare(`SELECT COUNT(*) n FROM appointments WHERE salon_id = ? AND status IN ('pending_payment','payment_submitted','confirmed')
+    AND start_local >= ? AND start_local <= ?`).get(req.salon.id, start + 'T00:00', end + 'T23:59').n;
+  res.json({ id, affected });
+});
+admin.delete('/closures/:id', (req, res) => {
+  db.prepare('DELETE FROM closures WHERE id = ? AND salon_id = ?').run(Number(req.params.id), req.salon.id);
+  res.json({ ok: true });
+});
+
+// Emails to clients (confirmation, reminder, cancellation) and when the reminder goes out.
+admin.put('/client-emails', (req, res) => {
+  const hours = Number(req.body?.reminderHours);
+  if (![0, 2, 12, 24, 48].includes(hours)) return bad(res, 'Choose when the reminder goes out.');
+  db.prepare('UPDATE salons SET client_emails = ?, reminder_hours = ? WHERE id = ?').run(req.body?.enabled ? 1 : 0, hours, req.salon.id);
   res.json({ ok: true });
 });
 
@@ -744,6 +797,7 @@ admin.post('/appointments/:id/confirm', async (req, res) => {
   if (!['pending_payment', 'payment_submitted'].includes(a.status))
     return bad(res, `This appointment is ${a.status} and can't be confirmed.`, 409);
   db.prepare(`UPDATE appointments SET status = 'confirmed' WHERE id = ?`).run(a.id);
+  sendClientConfirmation(req.salon, a);
   await google.syncConfirmed(req.salon, { ...a, status: 'confirmed' });
   res.json({ ok: true });
 });
@@ -753,6 +807,7 @@ admin.post('/appointments/:id/cancel', async (req, res) => {
   if (!a) return bad(res, 'Appointment not found.', 404);
   if (['cancelled', 'expired'].includes(a.status)) return res.json({ ok: true });
   db.prepare(`UPDATE appointments SET status = 'cancelled' WHERE id = ?`).run(a.id);
+  notifyClient('cancelled', req.salon, a);
   await google.removeEvents(req.salon, a);
   res.json({ ok: true });
 });
@@ -893,6 +948,29 @@ app.post('/api/google/disconnect', requireOwner, (req, res) => {
   db.prepare('UPDATE owners SET google_refresh_token = NULL, google_email = NULL WHERE id = ?').run(req.owner.id);
   res.json({ ok: true });
 });
+
+// ---------- client reminders ----------
+function sendDueReminders() {
+  if (!emailEnabled()) return;
+  try {
+    const salons = db.prepare('SELECT * FROM salons WHERE client_emails = 1 AND reminder_hours > 0 AND suspended_at IS NULL').all();
+    for (const salon of salons) {
+      const now = nowLocal(salon.timezone), until = addMinutes(now, salon.reminder_hours * 60);
+      const due = db.prepare(`SELECT * FROM appointments WHERE salon_id = ? AND status = 'confirmed' AND client_email <> ''
+        AND reminder_sent_at IS NULL AND start_local > ? AND start_local <= ?`).all(salon.id, now, until);
+      for (const a of due) {
+        if (!db.prepare("UPDATE appointments SET reminder_sent_at = datetime('now') WHERE id = ? AND reminder_sent_at IS NULL").run(a.id).changes) continue;
+        // Booked and confirmed only shortly before the window? The "you're booked" email already covers it.
+        const sentAt = a.client_confirm_sent_at ? Date.parse(a.client_confirm_sent_at.replace(' ', 'T') + 'Z') : 0;
+        if (Date.now() - sentAt < Math.min(6, salon.reminder_hours / 2) * 3600e3) continue;
+        notifyClient('reminder', salon, a, { link: clientLink(salon, a) });
+      }
+    }
+  } catch (e) { console.error('Reminder sweep failed:', e.message); }
+}
+const SWEEP_MS = Number(process.env.REMINDER_SWEEP_MS) || 5 * 60e3;
+setTimeout(sendDueReminders, Math.min(SWEEP_MS, 30e3)).unref();
+setInterval(sendDueReminders, SWEEP_MS).unref();
 
 // ---------- pages ----------
 // Privacy policy and terms (linked from the sign-in and booking pages, and from Google's OAuth consent screen).

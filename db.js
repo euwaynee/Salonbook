@@ -84,6 +84,9 @@ for (const [col, def] of [
   ['mmg_private_key', "TEXT NOT NULL DEFAULT ''"],
 ]) if (!salonCols.includes(col)) db.exec(`ALTER TABLE salons ADD COLUMN ${col} ${def}`);
 
+// Client emails on/off, and how many hours before an appointment the reminder goes out (0 = no reminder).
+if (!salonCols.includes('client_emails')) db.exec('ALTER TABLE salons ADD COLUMN client_emails INTEGER NOT NULL DEFAULT 1');
+if (!salonCols.includes('reminder_hours')) db.exec('ALTER TABLE salons ADD COLUMN reminder_hours INTEGER NOT NULL DEFAULT 24');
 // Suspended by a platform admin: booking page and owner logins stop working until lifted.
 if (!salonCols.includes('suspended_at')) db.exec('ALTER TABLE salons ADD COLUMN suspended_at TEXT');
 // Other payment options. PayPal can't take GYD, so PayPal deposits are charged in USD at usd_rate (GYD per 1 USD).
@@ -102,6 +105,9 @@ if (!ownerCols.includes('email_verified')) {
 
 const apptCols = db.prepare('PRAGMA table_info(appointments)').all().map((c) => c.name);
 if (!apptCols.includes('paid_via')) db.exec("ALTER TABLE appointments ADD COLUMN paid_via TEXT NOT NULL DEFAULT ''"); // '' | 'mmg' | 'paypal': confirmed by the gateway itself
+// Emails to the client (only when they gave an address): confirmation, reminder, cancellation.
+if (!apptCols.includes('client_confirm_sent_at')) db.exec('ALTER TABLE appointments ADD COLUMN client_confirm_sent_at TEXT');
+if (!apptCols.includes('reminder_sent_at')) db.exec('ALTER TABLE appointments ADD COLUMN reminder_sent_at TEXT');
 // How the client chose to pay: 'mmg' (manual transfer) | 'mmg_checkout' | 'paypal_me' | 'paypal_checkout' | 'cash'
 if (!apptCols.includes('pay_method')) db.exec("ALTER TABLE appointments ADD COLUMN pay_method TEXT NOT NULL DEFAULT ''");
 
@@ -116,6 +122,16 @@ CREATE TABLE IF NOT EXISTS mmg_attempts (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mmg_attempt_txn ON mmg_attempts(mmg_txn_id) WHERE mmg_txn_id IS NOT NULL;
+
+-- Days the salon is closed (holidays, time off), inclusive. Dates are the salon's local 'YYYY-MM-DD'.
+CREATE TABLE IF NOT EXISTS closures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_closures_salon ON closures(salon_id, end_date);
 
 -- One row per PayPal order. The order is only captured (money taken) when the client comes back to us.
 CREATE TABLE IF NOT EXISTS paypal_attempts (
