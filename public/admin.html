@@ -166,9 +166,15 @@
         <label for="m-secret">Secret key</label><input id="m-secret" type="password" maxlength="200" autocomplete="new-password">
         <label for="m-pub">MMG public key <span class="muted">(PEM, from MMG)</span></label>
         <textarea id="m-pub" rows="3" spellcheck="false" placeholder="-----BEGIN PUBLIC KEY-----"></textarea>
-        <label for="m-priv">Your private key <span class="muted">(PEM, matches the public key you gave MMG)</span></label>
-        <textarea id="m-priv" rows="3" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
-        <p class="muted">Give MMG this Response URL: <span class="code" id="m-return"></span></p>
+        <p><b>Give MMG these two things</b></p>
+        <p class="muted">1. Response URL: <span class="code" id="m-return"></span></p>
+        <p class="muted">2. Your salon’s public key. SalonBook makes this for you and keeps the private half on the server.</p>
+        <div id="m-key"></div>
+        <details>
+          <summary class="muted">Already gave MMG a key of your own? Paste its private key instead</summary>
+          <label for="m-priv">Your private key <span class="muted">(PEM, matches the public key you gave MMG)</span></label>
+          <textarea id="m-priv" rows="3" spellcheck="false" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+        </details>
         <div class="err" id="err-mmg" role="alert"></div>
         <div class="save-bar"><button type="submit">Save MMG settings</button> <span id="m-saved" class="ok-msg"></span></div>
       </div>
@@ -402,6 +408,40 @@ function fillMmg() {
   $('m-pub').placeholder = m.hasPublicKey ? 'Saved (leave blank to keep)' : '-----BEGIN PUBLIC KEY-----';
   $('m-priv').placeholder = m.hasPrivateKey ? 'Saved (leave blank to keep)' : '-----BEGIN PRIVATE KEY-----';
   $('m-return').textContent = m.responseUrl;
+  renderMmgKey();
+}
+function renderMmgKey() {
+  const k = ME.mmgApi.salonPublicKey, box = $('m-key');
+  if (!k) {
+    box.innerHTML = `<button type="button" class="ghost small" id="k-new">Create my public key</button>
+      <span class="muted" id="k-msg"></span><div class="err" id="err-k" role="alert"></div>`;
+  } else {
+    box.innerHTML = `<label for="k-pub">Your public key <span class="muted">(send this to MMG)</span></label>
+      <textarea id="k-pub" rows="4" readonly spellcheck="false">${esc(k)}</textarea>
+      <button type="button" class="ghost small" id="k-copy">Copy key</button>
+      <button type="button" class="ghost small" id="k-dl">Download .pem</button>
+      <button type="button" class="ghost small" id="k-new">Replace key</button>
+      <span class="muted" id="k-msg"></span><div class="err" id="err-k" role="alert"></div>`;
+    $('k-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(k); $('k-msg').textContent = 'Copied'; }
+      catch { $('k-pub').select(); $('k-msg').textContent = 'Press Ctrl+C to copy'; }
+    };
+    $('k-dl').onclick = () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([k], { type: 'application/x-pem-file' }));
+      a.download = `${ME.salon.slug}-mmg-public-key.pem`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+  }
+  $('k-new').onclick = async () => {
+    const replace = Boolean(k);
+    if (replace && !confirm('MMG checkout will stop working until you send MMG the new public key, so online payments will be turned off. Replace the key?')) return;
+    $('err-k').textContent = ''; $('k-new').disabled = true; $('k-msg').textContent = 'Creating key…';
+    try {
+      await api('POST', '/api/admin/mmg/keypair', { replace });
+      ME = await api('GET', '/api/admin/me'); fillMmg();
+      $('k-msg').textContent = replace ? 'New key created. Send it to MMG, then turn online payments back on.' : 'Key created. Send it to MMG.';
+    } catch (x) { $('err-k').textContent = x.message; $('k-new').disabled = false; $('k-msg').textContent = ''; }
+  };
 }
 $('mmg-form').onsubmit = async (e) => {
   e.preventDefault(); $('err-mmg').textContent = ''; $('m-saved').textContent = '';

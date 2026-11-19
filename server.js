@@ -404,6 +404,8 @@ admin.get('/me', (req, res) => {
       enabled: Boolean(salon.mmg_api_enabled), ready: mmg.configured(salon), mode: salon.mmg_mode,
       merchantId: salon.mmg_merchant_id, clientId: salon.mmg_client_id,
       hasSecretKey: Boolean(salon.mmg_secret_key), hasPublicKey: Boolean(salon.mmg_public_key), hasPrivateKey: Boolean(salon.mmg_private_key),
+      // Safe to show: this is the public half of the salon's own key, which they give to MMG.
+      salonPublicKey: mmg.publicFromPrivate(salon.mmg_private_key),
       responseUrl: `${BASE_URL}/api/mmg/return/${salon.slug}`,
     },
     notify: { emailAvailable: emailEnabled(), email: Boolean(owner.notify_email) },
@@ -432,6 +434,23 @@ admin.put('/mmg', (req, res) => {
   db.prepare(`UPDATE salons SET mmg_api_enabled=?, mmg_mode=?, mmg_merchant_id=?, mmg_client_id=?, mmg_secret_key=?, mmg_public_key=?, mmg_private_key=? WHERE id=?`)
     .run(next.mmg_api_enabled, next.mmg_mode, next.mmg_merchant_id, next.mmg_client_id, next.mmg_secret_key, next.mmg_public_key, next.mmg_private_key, s.id);
   res.json({ ok: true });
+});
+
+// Create this salon's key pair so the owner doesn't have to make one. The private half stays on the server;
+// the public half is shown in Settings for them to give MMG. Replacing a key breaks checkout until MMG has
+// the new public key, so that needs replace: true and turns online payments off.
+admin.post('/mmg/keypair', limit('mmgkey', 10, 3600e3), async (req, res) => {
+  const s = req.salon;
+  if (s.mmg_private_key && !req.body?.replace) return bad(res, 'This salon already has a key. Confirm to replace it.', 409);
+  try {
+    const { privateKey } = await mmg.generateKeyPair();
+    const off = s.mmg_private_key ? 0 : s.mmg_api_enabled;
+    db.prepare('UPDATE salons SET mmg_private_key = ?, mmg_api_enabled = ? WHERE id = ?').run(privateKey, off, s.id);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('MMG key generation failed', e.message);
+    bad(res, 'The key could not be created. Please try again.', 500);
+  }
 });
 
 // Each owner chooses whether they personally get notification emails.

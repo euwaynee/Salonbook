@@ -37,6 +37,21 @@ function checkKey(pem, kind) {
   } catch { return kind === 'public' ? 'MMG public key is not a valid PEM key.' : 'Your private key is not a valid PEM key.'; }
 }
 
+// A new key pair for one salon. MMG encrypts its response to the public half, so it has to be
+// big enough for that JSON: 4096-bit with OAEP-SHA256 fits 446 bytes (2048-bit only fits 190).
+const generateKeyPair = () => new Promise((resolve, reject) =>
+  crypto.generateKeyPair('rsa', {
+    modulusLength: 4096,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  }, (err, publicKey, privateKey) => (err ? reject(err) : resolve({ publicKey, privateKey }))));
+
+// The public half of a stored private key (the part the salon gives MMG), or '' if there isn't a usable one.
+function publicFromPrivate(pem) {
+  if (!pem) return '';
+  try { return crypto.createPublicKey(pem).export({ type: 'spki', format: 'pem' }).toString(); } catch { return ''; }
+}
+
 const configured = (s) => Boolean(s.mmg_api_enabled && s.mmg_merchant_id && s.mmg_client_id && s.mmg_secret_key && s.mmg_public_key && s.mmg_private_key);
 
 // Build the URL that sends the client to MMG's hosted checkout page.
@@ -81,4 +96,4 @@ function decodeResponse(salon, token) {
   };
 }
 
-module.exports = { configured, checkoutUrl, decodeResponse, checkKey, RESULT, CHECKOUT_URLS };
+module.exports = { configured, checkoutUrl, decodeResponse, checkKey, generateKeyPair, publicFromPrivate, RESULT, CHECKOUT_URLS };
