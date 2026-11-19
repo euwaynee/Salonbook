@@ -19,7 +19,8 @@
   </div>
 </div></header>
 
-<main class="wrap dash">
+<main class="wrap dash" id="main">
+  <div id="verify-banner" class="notice hide" role="status"></div>
   <div id="welcome" class="welcome hide">
     <h2>Welcome! Three quick steps</h2>
     <ol>
@@ -183,6 +184,32 @@
       </div>
     </form>
 
+    <form class="set" id="payopt-form">
+      <header>
+        <h3>Other ways to pay</h3>
+        <p class="muted">Give clients more choices alongside MMG. PayPal can’t take Guyanese dollars, so PayPal deposits are charged in US dollars at your rate.</p>
+      </header>
+      <div>
+        <label class="check"><input type="checkbox" id="p-cash"> Let clients pay cash at the salon instead <span class="muted">(no deposit; you confirm each booking)</span></label>
+        <div class="row">
+          <div><label for="p-rate">US dollar rate <span class="muted">(GYD for 1 USD, e.g. 210)</span></label><input id="p-rate" type="number" min="0" step="any"></div>
+          <div><label for="p-me">PayPal.me name <span class="muted">(paypal.me/yourname)</span></label><input id="p-me" maxlength="40" autocomplete="off" placeholder="yourname"></div>
+        </div>
+        <p class="muted">With a PayPal.me name, clients send the deposit themselves and type in the PayPal transaction ID; you check it and confirm.</p>
+        <p><b>PayPal checkout</b></p>
+        <p class="muted">Clients pay on PayPal’s own page and the booking confirms itself. Create an app at developer.paypal.com (Apps &amp; Credentials) and paste its client ID and secret. Your PayPal account must be able to receive payments.</p>
+        <label class="check"><input type="checkbox" id="p-on"> Take deposits through PayPal checkout</label>
+        <div class="row">
+          <div><label for="p-mode">Mode</label>
+            <select id="p-mode"><option value="sandbox">Sandbox (testing)</option><option value="live">Live (real money)</option></select></div>
+          <div><label for="p-cid">Client ID</label><input id="p-cid" maxlength="200" autocomplete="off"></div>
+        </div>
+        <label for="p-secret">Secret</label><input id="p-secret" type="password" maxlength="200" autocomplete="new-password">
+        <div class="err" id="err-payopt" role="alert"></div>
+        <div class="save-bar"><button type="submit">Save payment options</button> <span id="p-saved" class="ok-msg"></span></div>
+      </div>
+    </form>
+
     <div class="set">
       <header>
         <h3>Notifications</h3>
@@ -222,6 +249,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const money = (n) => 'GYD ' + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const STATUS = { pending_payment: 'Awaiting payment', payment_submitted: 'Payment reported', confirmed: 'Confirmed', cancelled: 'Cancelled', expired: 'Expired' };
+const METHOD = { mmg: 'MMG transfer', mmg_checkout: 'MMG checkout', paypal_me: 'PayPal.me', paypal_checkout: 'PayPal checkout', cash: 'Cash at the salon' };
 let ME = null;
 let LOGO = null; // null = unchanged, '' = remove, data URL = new logo
 
@@ -273,12 +301,13 @@ async function loadAppts() {
           <div><dt>Price</dt><dd>${money(a.price)}</dd></div>
           <div><dt>Deposit</dt><dd>${money(a.deposit)}</dd></div>
           <div><dt>Code</dt><dd><b>${esc(a.code)}</b></dd></div>
-          ${a.paymentRef ? `<div><dt>MMG transaction ID</dt><dd><b>${esc(a.paymentRef)}</b>${a.paidVia === 'mmg' ? ' <span class="muted">(verified by MMG)</span>' : ''}</dd></div>` : ''}
+          ${a.payMethod ? `<div><dt>Paying by</dt><dd>${METHOD[a.payMethod] || esc(a.payMethod)}</dd></div>` : ''}
+          ${a.paymentRef ? `<div><dt>${a.payMethod?.startsWith('paypal') ? 'PayPal' : 'MMG'} transaction ID</dt><dd><b>${esc(a.paymentRef)}</b>${a.paidVia ? ` <span class="muted">(verified by ${a.paidVia === 'paypal' ? 'PayPal' : 'MMG'})</span>` : ''}</dd></div>` : ''}
         </dl>
         ${a.notes ? `<p class="appt-note">Note: ${esc(a.notes)}</p>` : ''}
       </div>
       <div class="actions">
-        ${['pending_payment', 'payment_submitted'].includes(a.status) ? `<button type="button" class="small" data-act="confirm" data-id="${a.id}">Payment received: confirm</button>` : ''}
+        ${['pending_payment', 'payment_submitted'].includes(a.status) ? `<button type="button" class="small" data-act="confirm" data-id="${a.id}" data-method="${esc(a.payMethod)}">${a.payMethod === 'cash' ? 'Confirm cash booking' : 'Payment received: confirm'}</button>` : ''}
         ${['pending_payment', 'payment_submitted', 'confirmed'].includes(a.status) ? `<button type="button" class="small danger" data-act="cancel" data-id="${a.id}">Cancel</button>` : ''}
         <a class="btn ghost small" href="tel:${esc(tel)}">Call</a>
         <a class="btn ghost small" target="_blank" rel="noopener" href="https://wa.me/${esc(tel.replace('+', ''))}">WhatsApp</a>
@@ -289,7 +318,9 @@ async function loadAppts() {
 $('appt-list').onclick = async (e) => {
   const b = e.target.closest('button[data-act]'); if (!b) return;
   if (b.dataset.act === 'cancel' && !confirm('Cancel this appointment? It will also be removed from your Google Calendar.')) return;
-  if (b.dataset.act === 'confirm' && !confirm('Confirm only after you have seen the MMG deposit in your account. Continue?')) return;
+  if (b.dataset.act === 'confirm' && !confirm(b.dataset.method === 'cash'
+    ? 'Confirm this booking? The client pays in cash at the salon, with no deposit.'
+    : 'Confirm only after you have seen the deposit in your MMG or PayPal account. Continue?')) return;
   b.disabled = true;
   try { await api('POST', `/api/admin/appointments/${b.dataset.id}/${b.dataset.act}`); await loadAppts(); }
   catch (x) { alert(x.message); b.disabled = false; }
@@ -402,6 +433,27 @@ $('print-poster').onclick = () => {
   w.document.close();
 };
 
+// ---------- cash + PayPal ----------
+function fillPayments() {
+  const p = ME.payments;
+  $('p-cash').checked = p.cash; $('p-rate').value = p.usdRate || ''; $('p-me').value = p.paypalMe;
+  $('p-on').checked = p.paypal.enabled; $('p-mode').value = p.paypal.mode; $('p-cid').value = p.paypal.clientId;
+  $('p-secret').value = ''; $('p-secret').placeholder = p.paypal.hasSecret ? 'Saved (leave blank to keep)' : '';
+}
+$('payopt-form').onsubmit = async (e) => {
+  e.preventDefault(); $('err-payopt').textContent = ''; $('p-saved').textContent = '';
+  if ($('p-on').checked && $('p-mode').value === 'live' && !confirm('Live mode takes real money from clients. Continue?')) return;
+  const btn = e.submitter; if (btn) btn.disabled = true;
+  try {
+    await api('PUT', '/api/admin/payments', {
+      cash: $('p-cash').checked, usdRate: $('p-rate').value || 0, paypalMe: $('p-me').value.trim(),
+      paypalEnabled: $('p-on').checked, paypalMode: $('p-mode').value, paypalClientId: $('p-cid').value.trim(), paypalSecret: $('p-secret').value.trim(),
+    });
+    ME = await api('GET', '/api/admin/me'); fillPayments(); $('p-saved').textContent = 'Saved';
+  } catch (x) { $('err-payopt').textContent = x.message; }
+  if (btn) btn.disabled = false;
+};
+
 // ---------- MMG online payments ----------
 function fillMmg() {
   const m = ME.mmgApi;
@@ -495,12 +547,34 @@ $('owner-add').onsubmit = async (e) => {
   catch (x) { $('err-own').textContent = x.message; }
 };
 
+// ---------- email confirmation ----------
+function renderVerify(flag) {
+  const box = $('verify-banner');
+  if (flag === '0') {
+    box.innerHTML = 'That confirmation link has expired or is for another account. Sign in and send a new one below.';
+  } else if (!ME.owner.emailVerified && !ME.live) {
+    box.innerHTML = `<b>Confirm your email to switch on your booking page.</b> We sent a link to ${esc(ME.owner.email)}.
+      <button type="button" class="small ghost" id="v-resend">Send it again</button> <span id="v-msg" class="muted"></span>`;
+    $('v-resend').onclick = async () => {
+      $('v-resend').disabled = true;
+      try { await api('POST', '/api/admin/verify/resend'); $('v-msg').textContent = 'Sent. Check your inbox and spam folder.'; }
+      catch (x) { $('v-msg').textContent = x.message; $('v-resend').disabled = false; }
+    };
+  } else if (flag === '1') {
+    box.innerHTML = 'Email confirmed. Your booking page is live.';
+  } else { box.classList.add('hide'); return; }
+  box.classList.remove('hide');
+}
+
 // ---------- boot ----------
 (async () => {
-  ME = await api('GET', '/api/admin/me');
+  try { ME = await api('GET', '/api/admin/me'); }
+  catch (x) { $('main').innerHTML = `<div class="card"><h2>Can’t open your dashboard</h2><p>${esc(x.message)}</p></div>`; return; }
   $('platform-link').classList.toggle('hide', !ME.owner.platformAdmin);
-  fillSettings(); fillMmg(); renderNotify(); renderGoogle();
+  fillSettings(); fillMmg(); fillPayments(); renderNotify(); renderGoogle();
   const q = new URLSearchParams(location.search);
+  renderVerify(q.get('verified'));
+  if (q.get('verified')) history.replaceState(null, '', '/admin.html' + (q.get('welcome') ? '?welcome=1' : ''));
   if (q.get('welcome')) $('welcome').classList.remove('hide');
   const gmsg = { connected: 'Google Calendar connected.', error: 'Google connection failed. Please try again.', unconfigured: 'Google sync is not configured on this server.' }[q.get('google')];
   if (gmsg) { alert(gmsg); history.replaceState(null, '', '/admin.html'); }

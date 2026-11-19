@@ -8,6 +8,7 @@
 //
 // Each salon has its own MMG merchant account, so credentials live on the salon row.
 const crypto = require('crypto');
+const { open } = require('./secrets');
 
 const CHECKOUT_URLS = {
   sandbox: 'https://mmgpg.mmgtest.net/mmg-pg/web/payments',
@@ -49,7 +50,7 @@ const generateKeyPair = () => new Promise((resolve, reject) =>
 // The public half of a stored private key (the part the salon gives MMG), or '' if there isn't a usable one.
 function publicFromPrivate(pem) {
   if (!pem) return '';
-  try { return crypto.createPublicKey(pem).export({ type: 'spki', format: 'pem' }).toString(); } catch { return ''; }
+  try { return crypto.createPublicKey(open(pem)).export({ type: 'spki', format: 'pem' }).toString(); } catch { return ''; }
 }
 
 const configured = (s) => Boolean(s.mmg_api_enabled && s.mmg_merchant_id && s.mmg_client_id && s.mmg_secret_key && s.mmg_public_key && s.mmg_private_key);
@@ -57,7 +58,7 @@ const configured = (s) => Boolean(s.mmg_api_enabled && s.mmg_merchant_id && s.mm
 // Build the URL that sends the client to MMG's hosted checkout page.
 function checkoutUrl(salon, { merchantTransactionId, amount, description }) {
   const payload = {
-    secretKey: salon.mmg_secret_key,
+    secretKey: open(salon.mmg_secret_key),
     amount: String(Math.round(amount)),
     merchantId: salon.mmg_merchant_id,
     merchantTransactionId,
@@ -82,7 +83,7 @@ function checkoutUrl(salon, { merchantTransactionId, amount, description }) {
 // Decrypt the token MMG sends back. Returns a normalised result object, or throws.
 function decodeResponse(salon, token) {
   const plain = crypto.privateDecrypt(
-    { key: salon.mmg_private_key, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: OAEP_HASH },
+    { key: open(salon.mmg_private_key), padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: OAEP_HASH },
     unb64url(token),
   ).toString('latin1');
   const r = JSON.parse(plain);

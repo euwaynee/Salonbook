@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Book an appointment</title>
-<meta name="description" content="Choose a service and a time, then hold it with an MMG deposit.">
+<meta name="description" content="Choose a service and a time, then secure it with a deposit.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
@@ -14,7 +14,7 @@
 <header class="top"><div class="wrap narrow"><div class="brand-id"><img id="logo" class="hide" alt="" width="44" height="44" src="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22/%3E"><h1 id="salon-name">Book an appointment</h1></div></div></header>
 <main class="wrap narrow book-main">
   <div id="loading" class="muted">Loading…</div>
-  <div id="notfound" class="hide"><h2>Salon not found</h2><p class="muted">Please check the link you were given.</p></div>
+  <div id="notfound" class="hide"><h2 id="notfound-title">Salon not found</h2><p class="muted" id="notfound-msg">Please check the link you were given.</p></div>
 
   <!-- BOOKING FLOW -->
   <div id="flow" class="hide">
@@ -45,7 +45,7 @@
       <label for="c-email">Email <span class="muted">(optional)</span></label><input id="c-email" type="email" autocomplete="email" maxlength="120">
       <label for="c-notes">Anything we should know? <span class="muted">(optional)</span></label><textarea id="c-notes" rows="2" maxlength="300"></textarea>
       <div class="err" id="err-book" role="alert"></div>
-      <button type="submit" id="book-btn">Continue to deposit</button>
+      <button type="submit" id="book-btn">Continue to payment</button>
     </form>
     </div>
   </div>
@@ -118,7 +118,7 @@ $('slots').onclick = (e) => {
   const b = e.target.closest('.chip'); if (!b) return;
   sel.time = b.dataset.t;
   $('slots').querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c === b));
-  $('summary').innerHTML = `<b>${esc(sel.service.name)}</b><br>${esc(fmtDate(sel.date))} at ${fmtTime(sel.time)}<br>Deposit to secure: <b>${money(sel.service.deposit)}</b>`;
+  $('summary').innerHTML = `<b>${esc(sel.service.name)}</b><br>${esc(fmtDate(sel.date))} at ${fmtTime(sel.time)}<br>Deposit to secure: <b>${money(sel.service.deposit)}</b>${SALON.cash ? ' (or pay cash at the salon)' : ''}`;
   setStep(3);
   $('step-details').scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
@@ -145,59 +145,74 @@ async function showStatus(code) {
   let d;
   try { d = await call('GET', `${API}/appointments/${encodeURIComponent(code)}`); }
   catch (x) { $('status').innerHTML = `<div class="card"><h2>Booking not found</h2><p class="muted">${esc(x.message)}</p><a href="${location.pathname}">Start a new booking</a></div>`; return; }
-  const a = d.appointment, m = d.salon.mmg;
+  const a = d.appointment, s = d.salon, m = s.mmg, pp = s.paypal;
   const when = `${esc(fmtDate(a.start.slice(0, 10)))} at ${fmtTime(a.start.slice(11))}`;
   const head = `<div class="card ticket"><h2>${esc(a.service)}</h2><div>${when}</div><div class="muted">Booking code <span class="code">${esc(a.code)}</span></div></div>`;
   let body = '';
 
-  const flag = new URLSearchParams(location.search).get('mmg');
+  // Coming back from MMG (?mmg=…) or PayPal (?paypal=…).
+  const q = new URLSearchParams(location.search);
+  const gw = q.get('paypal') ? 'PayPal' : 'MMG', flag = q.get('paypal') || q.get('mmg');
   const flagMsg = {
-    cancelled: 'MMG payment was cancelled. You can try again below.',
-    failed: 'MMG could not complete the payment. You can try again or pay manually below.',
-    error: 'We couldn’t read the response from MMG. If money left your account, contact the salon with your booking code.',
+    cancelled: `${gw} payment was cancelled. You can try again or choose another way to pay below.`,
+    failed: `${gw} could not complete the payment. You can try again or choose another way to pay below.`,
+    error: `We couldn’t confirm the ${gw} payment. If money left your account, contact the salon with your booking code.`,
   }[flag];
   const notice = flagMsg && a.status === 'pending_payment' ? `<p class="notice" role="status">${flagMsg}</p>` : '';
+  const usd = a.depositUsd ? `USD ${a.depositUsd}` : '';
 
-  if (a.status === 'pending_payment' && m.checkout) {
-    body = `<div class="card"><h2>Pay your deposit to secure it</h2>${notice}
-      <p>Your time is held for <b>${d.salon.holdMinutes} minutes</b> from booking.</p>
-      <div class="pay"><div class="big">${money(a.deposit)}</div><div>Paid securely in MMG. Your booking confirms automatically.</div></div>
-      <div class="err" id="err-mmg" role="alert"></div>
-      <button type="button" id="mmg-pay">Pay with MMG</button>
-      <p class="muted">Balance of ${money(a.price - a.deposit)} is paid at the salon.</p>
-      <details><summary class="muted">Can’t use MMG checkout? Pay manually instead</summary>
-      <div class="pay">
-        <div>MMG number: <b>${esc(m.number || 'ask the salon')}</b></div>
-        ${m.name ? `<div>Account name: <b>${esc(m.name)}</b></div>` : ''}
-        <div>Add this as the note/reference: <span class="code">${esc(a.code)}</span></div>
-      </div>
-      <form id="pay-form">
-        <label for="ref">After paying, enter the MMG transaction ID from your receipt</label>
-        <input id="ref" required minlength="4" maxlength="60" autocomplete="off">
-        <div class="err" id="err-pay" role="alert"></div>
-        <button type="submit" class="ghost">I’ve paid</button>
-      </form></details></div>`;
-  } else if (a.status === 'pending_payment') {
-    body = `<div class="card"><h2>Send your deposit to secure it</h2>${notice}
-      <p>Your time is held for <b>${d.salon.holdMinutes} minutes</b> from booking. Please pay the deposit through MMG:</p>
-      <div class="pay">
-        <div class="big">${money(a.deposit)}</div>
-        <div>MMG number: <b>${esc(m.number || 'ask the salon')}</b></div>
-        ${m.name ? `<div>Account name: <b>${esc(m.name)}</b></div>` : ''}
-        <div>Add this as the note/reference: <span class="code">${esc(a.code)}</span></div>
-      </div>
-      <p class="muted">Balance of ${money(a.price - a.deposit)} is paid at the salon.</p>
-      <form id="pay-form">
-        <label for="ref">After paying, enter the MMG transaction ID from your receipt</label>
-        <input id="ref" required minlength="4" maxlength="60" autocomplete="off">
-        <div class="err" id="err-pay" role="alert"></div>
-        <button type="submit">I’ve paid</button>
-      </form></div>`;
+  // A manual payment the client reports with a transaction ID (MMG transfer or PayPal.me).
+  const reportForm = (method, label) => `<form class="pay-form" data-method="${method}">
+      <label for="ref-${method}">After paying, enter the ${label} transaction ID from your receipt</label>
+      <input id="ref-${method}" class="ref" required minlength="4" maxlength="60" autocomplete="off">
+      <div class="err" role="alert"></div>
+      <button type="submit" class="ghost">I’ve paid</button>
+    </form>`;
+
+  if (a.status === 'pending_payment') {
+    const online = [
+      m.checkout ? `<button type="button" data-checkout="mmg">Pay with MMG</button>` : '',
+      pp.checkout && usd ? `<button type="button" data-checkout="paypal">Pay with PayPal (${usd})</button>` : '',
+    ].filter(Boolean).join(' ');
+    const manual = [
+      m.number ? `<details ${online ? '' : 'open'}><summary>Send by MMG${m.checkout ? ' manually' : ''}</summary>
+        <div class="pay">
+          <div>MMG number: <b>${esc(m.number)}</b></div>
+          ${m.name ? `<div>Account name: <b>${esc(m.name)}</b></div>` : ''}
+          <div>Add this as the note/reference: <span class="code">${esc(a.code)}</span></div>
+        </div>${reportForm('mmg', 'MMG')}</details>` : '',
+      pp.me && usd ? `<details><summary>Send by PayPal.me (${usd})</summary>
+        <div class="pay">
+          <div><a class="btn ghost small" href="https://paypal.me/${encodeURIComponent(pp.me)}/${a.depositUsd}USD" target="_blank" rel="noopener">Open paypal.me/${esc(pp.me)}</a></div>
+          <div>Add this as the note: <span class="code">${esc(a.code)}</span></div>
+        </div>${reportForm('paypal_me', 'PayPal')}</details>` : '',
+    ].filter(Boolean).join('');
+    const none = !online && !manual && !s.cash;
+    if (s.cash && !online && !manual) {
+      // Cash is the only option: no deposit to show, just confirm.
+      body = `<div class="card"><h2>Confirm your booking</h2>
+        <p>Your time is held for <b>${s.holdMinutes} minutes</b>. You pay <b>${money(a.price)}</b> in cash at the salon; the salon confirms your booking.</p>
+        <div class="err" id="err-cash" role="alert"></div><button type="button" id="cash-btn">Book and pay at the salon</button></div>`;
+    } else body = `<div class="card"><h2>Pay your deposit to secure it</h2>${notice}
+      <p>Your time is held for <b>${s.holdMinutes} minutes</b> from booking.</p>
+      <div class="pay"><div class="big">${money(a.deposit)}</div>
+        ${usd && (pp.checkout || pp.me) ? `<div class="muted">${usd} if you pay by PayPal</div>` : ''}
+        ${online ? '<div>Pay online and your booking confirms automatically.</div>' : ''}</div>
+      ${online ? `<div class="err" id="err-checkout" role="alert"></div><div class="pay-buttons">${online}</div>` : ''}
+      ${manual}
+      ${s.cash ? `<div class="pay-cash"><p class="muted">Prefer cash? Pay the full ${money(a.price)} at the salon. No deposit now; the salon confirms your booking.</p>
+        <div class="err" id="err-cash" role="alert"></div><button type="button" class="ghost" id="cash-btn">Pay cash at the salon</button></div>` : ''}
+      ${none ? `<p>Please contact the salon to arrange your deposit${s.phone ? `: <b>${esc(s.phone)}</b>` : ''}.</p>` : ''}
+      ${a.deposit < a.price ? `<p class="muted">Balance of ${money(a.price - a.deposit)} is paid at the salon.</p>` : ''}</div>`;
   } else if (a.status === 'payment_submitted' && flag === 'paid') {
     body = `<div class="card"><h2>Payment received</h2>
-      <p>MMG confirmed your deposit, but your hold had run out and the time may no longer be free. The salon has been told and will contact you. Your booking code is <b>${esc(a.code)}</b>.</p></div>`;
+      <p>${gw} confirmed your deposit, but your hold had run out and the time may no longer be free. The salon has been told and will contact you. Your booking code is <b>${esc(a.code)}</b>.</p></div>`;
+  } else if (a.status === 'payment_submitted' && a.payMethod === 'cash') {
+    body = `<div class="card"><h2>Booked: pay at the salon</h2>
+      <p>You’ll pay ${money(a.price)} in cash at your appointment. The salon will confirm your booking; this page updates automatically. Keep your code <b>${esc(a.code)}</b>.</p></div>`;
   } else if (a.status === 'payment_submitted') {
     body = `<div class="card"><h2>Thanks, payment reported</h2>
+      ${flag === 'pending' ? '<p>PayPal is still processing your payment.</p>' : ''}
       <p>The salon will check the deposit and confirm your appointment. Keep this page or your code <b>${esc(a.code)}</b>; this page updates automatically.</p></div>`;
   } else if (a.status === 'confirmed') {
     body = `<div class="card"><h2 class="ok-msg">You’re booked!</h2>
@@ -211,21 +226,29 @@ async function showStatus(code) {
   }
   $('status').innerHTML = head + body;
 
-  const mp = $('mmg-pay');
-  if (mp) mp.onclick = async () => {
-    $('err-mmg').textContent = ''; mp.disabled = true; mp.textContent = 'Opening MMG…';
-    try { const r = await call('POST', `${API}/appointments/${encodeURIComponent(code)}/mmg-checkout`); location.href = r.url; }
-    catch (x) { $('err-mmg').textContent = x.message; mp.disabled = false; mp.textContent = 'Pay with MMG'; }
+  const base = `${API}/appointments/${encodeURIComponent(code)}`;
+  $('status').querySelectorAll('[data-checkout]').forEach((btn) => btn.onclick = async () => {
+    const label = btn.textContent, gwName = btn.dataset.checkout === 'paypal' ? 'PayPal' : 'MMG';
+    $('err-checkout').textContent = ''; btn.disabled = true; btn.textContent = `Opening ${gwName}…`;
+    try { const r = await call('POST', `${base}/${btn.dataset.checkout}-checkout`); location.href = r.url; }
+    catch (x) { $('err-checkout').textContent = x.message; btn.disabled = false; btn.textContent = label; }
+  });
+  $('status').querySelectorAll('.pay-form').forEach((f) => f.onsubmit = async (e) => {
+    e.preventDefault(); const err = f.querySelector('.err'); err.textContent = '';
+    try { await call('POST', `${base}/payment`, { method: f.dataset.method, reference: f.querySelector('.ref').value }); showStatus(code); }
+    catch (x) { err.textContent = x.message; }
+  });
+  const cb = $('cash-btn');
+  if (cb) cb.onclick = async () => {
+    if (!confirm(`Book without a deposit and pay ${money(a.price)} in cash at the salon?`)) return;
+    $('err-cash').textContent = ''; cb.disabled = true;
+    try { await call('POST', `${base}/cash`); showStatus(code); }
+    catch (x) { $('err-cash').textContent = x.message; cb.disabled = false; }
   };
-  const pf = $('pay-form');
-  if (pf) pf.onsubmit = async (e) => {
-    e.preventDefault(); $('err-pay').textContent = '';
-    try { await call('POST', `${API}/appointments/${encodeURIComponent(code)}/payment`, { reference: $('ref').value }); showStatus(code); }
-    catch (x) { $('err-pay').textContent = x.message; }
-  };
-  // Refresh status every 20s (skipped while the client is typing their transaction ID).
+  // Refresh status every 20s (skipped while the client is typing a transaction ID or has a payment section open).
   if (['pending_payment', 'payment_submitted'].includes(a.status)) {
-    const tick = () => { if (document.activeElement?.id === 'ref') poll = setTimeout(tick, 20000); else showStatus(code); };
+    const busy = () => document.activeElement?.classList.contains('ref') || (a.status === 'pending_payment' && $('status').querySelector('details[open]'));
+    const tick = () => { if (busy()) poll = setTimeout(tick, 20000); else showStatus(code); };
     poll = setTimeout(tick, 20000);
   }
 }
@@ -244,7 +267,10 @@ async function showStatus(code) {
     const code = new URLSearchParams(location.search).get('code');
     if (code) return showStatus(code);
     $('flow').classList.remove('hide'); renderServices();
-  } catch { $('loading').classList.add('hide'); $('notfound').classList.remove('hide'); }
+  } catch (x) {
+    $('loading').classList.add('hide'); $('notfound').classList.remove('hide');
+    if (!/not found/i.test(x.message)) { $('notfound-title').textContent = 'Booking unavailable'; $('notfound-msg').textContent = x.message; }
+  }
 })();
 </script>
 </body>

@@ -2,6 +2,7 @@ node_modules
 *.db
 *.db-*
 .session_secret
+.data_key
 .env
 .hallmark/before/
 .hallmark/*.json

@@ -14,6 +14,8 @@ const path = require('path');
 const db = require('./db');
 const google = require('./google');
 const mmg = require('./mmg');
+const paypal = require('./paypal');
+const { seal, open, migrate: sealStoredSecrets } = require('./secrets');
 const { notify, emailEnabled, sendMail } = require('./notify');
 
 const PORT = process.env.PORT || 3000;
@@ -31,6 +33,12 @@ if (!SECRET) {
   if (fs.existsSync(SECRET_FILE)) SECRET = fs.readFileSync(SECRET_FILE, 'utf8').trim();
   else { SECRET = crypto.randomBytes(32).toString('hex'); fs.writeFileSync(SECRET_FILE, SECRET, { mode: 0o600 }); }
 }
+
+// Encrypt any secrets still stored in plain text (older rows). Logs only when something changed.
+{ const n = sealStoredSecrets(db); if (n) console.log(`Encrypted ${n} stored secret(s) in the database.`); }
+
+const CONTACT = String(process.env.CONTACT_EMAIL || '').trim();
+const SUSPENDED_MSG = `This salon has been suspended. ${CONTACT ? `Contact ${CONTACT}` : 'Contact the SalonBook operator'} for help.`;
 
 const sign = (payload) => {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -141,13 +149,15 @@ const publicSalon = (s) => ({
   brandColor: s.brand_color, logo: s.logo,
   hours: JSON.parse(s.hours), holdMinutes: s.hold_minutes,
   mmg: { number: s.mmg_number, name: s.mmg_name, checkout: mmg.configured(s) },
+  cash: Boolean(s.pay_cash),
+  paypal: { checkout: paypal.configured(s), me: s.usd_rate > 0 && s.paypal_me ? s.paypal_me : '' },
 });
 const apptOut = (a) => ({
   id: a.id, code: a.code, service: a.service_name, price: a.price, deposit: a.deposit,
   clientName: a.client_name, clientPhone: a.client_phone, clientEmail: a.client_email, notes: a.notes,
   start: a.start_local, end: a.end_local, status: a.status,
   paymentRef: a.payment_ref, paymentSubmittedAt: a.payment_submitted_at, createdAt: a.created_at,
-  synced: Boolean(a.google_event_id), paidVia: a.paid_via,
+  synced: Boolean(a.google_event_id), paidVia: a.paid_via, payMethod: a.pay_method,
 });
 
 // ---------- auth ----------
@@ -158,6 +168,7 @@ function requireOwner(req, res, next) {
   if (!owner) return bad(res, 'Please sign in.', 401);
   req.owner = owner;
   req.salon = db.prepare('SELECT * FROM salons WHERE id = ?').get(owner.salon_id);
+  if (req.salon.suspended_at && !isPlatformAdmin(owner)) return bad(res, SUSPENDED_MSG, 403);
   next();
 }
 const setSession = (res, ownerId) =>
@@ -177,20 +188,44 @@ app.post('/api/auth/register', limit('register', 10, 3600e3), (req, res) => {
   if (db.prepare('SELECT 1 FROM owners WHERE email = ?').get(em)) return bad(res, 'That email is already registered.', 409);
   let slug = slugify(salonName), n = 1;
   while (db.prepare('SELECT 1 FROM salons WHERE slug = ?').get(slug)) slug = `${slugify(salonName)}-${++n}`;
+  // Without email on this server there is no way to verify, so accounts start verified.
+  const verified = emailEnabled() ? 0 : 1;
   const tx = db.transaction(() => {
     const sid = db.prepare('INSERT INTO salons (slug, name) VALUES (?, ?)').run(slug, str(salonName)).lastInsertRowid;
-    return db.prepare('INSERT INTO owners (salon_id, email, name, password_hash) VALUES (?,?,?,?)')
-      .run(sid, em, str(name), bcrypt.hashSync(String(password), 10)).lastInsertRowid;
+    return db.prepare('INSERT INTO owners (salon_id, email, name, password_hash, email_verified) VALUES (?,?,?,?,?)')
+      .run(sid, em, str(name), bcrypt.hashSync(String(password), 10), verified).lastInsertRowid;
   });
   const oid = tx();
+  if (!verified) sendVerifyEmail(db.prepare('SELECT * FROM owners WHERE id = ?').get(oid));
   setSession(res, oid);
   res.json({ ok: true, slug });
+});
+
+// ---------- email verification ----------
+// New salons stay off the public booking pages until an owner clicks the link we email them.
+// The link is a signed 48-hour token tied to the address it was sent to.
+function sendVerifyEmail(owner) {
+  const link = `${BASE_URL}/api/auth/verify?t=${encodeURIComponent(sign({ oid: owner.id, exp: Date.now() + 48 * 3600e3, n: 'ev', e: owner.email }))}`;
+  return sendMail(owner.email, 'Confirm your email for SalonBook',
+    `Hi ${owner.name},\n\nPlease confirm this is your email address. Your booking page goes live once you do.\n\n${link}\n\nThe link works for 48 hours. If you didn't sign up for SalonBook, ignore this email.\n\n— SalonBook`)
+    .catch((e) => console.error('Verification email failed:', e.message));
+}
+
+app.get('/api/auth/verify', limit('verify', 20, 3600e3), (req, res) => {
+  const p = verify(str(req.query.t, 800));
+  const owner = p && p.n === 'ev' ? db.prepare('SELECT * FROM owners WHERE id = ?').get(p.oid) : null;
+  if (!owner || owner.email !== p.e) return res.redirect('/admin.html?verified=0');
+  db.prepare('UPDATE owners SET email_verified = 1 WHERE id = ?').run(owner.id);
+  setSession(res, owner.id); // clicking the emailed link proves they own the address, same as a password reset
+  res.redirect('/admin.html?verified=1');
 });
 
 app.post('/api/auth/login', limit('login', 10, 15 * 60e3), (req, res) => {
   const owner = db.prepare('SELECT * FROM owners WHERE email = ?').get(str(req.body?.email).toLowerCase());
   if (!owner || !bcrypt.compareSync(String(req.body?.password || ''), owner.password_hash))
     return bad(res, 'Incorrect email or password.', 401);
+  const salon = db.prepare('SELECT suspended_at FROM salons WHERE id = ?').get(owner.salon_id);
+  if (salon?.suspended_at && !isPlatformAdmin(owner)) return bad(res, SUSPENDED_MSG, 403);
   setSession(res, owner.id);
   res.json({ ok: true });
 });
@@ -234,18 +269,28 @@ app.post('/api/auth/reset', limit('reset', 10, 3600e3), (req, res) => {
 
 // ---------- public booking API (no login) ----------
 const getSalonBySlug = (slug) => db.prepare('SELECT * FROM salons WHERE slug = ?').get(str(slug, 60));
+// A salon takes bookings only when it isn't suspended and at least one owner has confirmed their email.
+const takingBookings = (salon) => !salon.suspended_at &&
+  Boolean(db.prepare('SELECT 1 FROM owners WHERE salon_id = ? AND email_verified = 1').get(salon.id));
+// For routes that start something new (viewing, booking, paying). Sends the error itself and returns null.
+function openSalon(req, res) {
+  const salon = getSalonBySlug(req.params.slug);
+  if (!salon) { bad(res, 'Salon not found.', 404); return null; }
+  if (!takingBookings(salon)) { bad(res, 'This salon is not taking online bookings right now. Please contact them directly.', 403); return null; }
+  return salon;
+}
 
 app.get('/api/public/:slug', (req, res) => {
-  const salon = getSalonBySlug(req.params.slug);
-  if (!salon) return bad(res, 'Salon not found.', 404);
+  const salon = openSalon(req, res);
+  if (!salon) return;
   const services = db.prepare('SELECT id, name, duration_min, price FROM services WHERE salon_id = ? AND active = 1 ORDER BY name').all(salon.id)
     .map((s) => ({ ...s, deposit: depositFor(salon, s.price) }));
   res.json({ salon: publicSalon(salon), services, today: nowLocal(salon.timezone).slice(0, 10) });
 });
 
 app.get('/api/public/:slug/slots', (req, res) => {
-  const salon = getSalonBySlug(req.params.slug);
-  if (!salon) return bad(res, 'Salon not found.', 404);
+  const salon = openSalon(req, res);
+  if (!salon) return;
   const service = db.prepare('SELECT * FROM services WHERE id = ? AND salon_id = ? AND active = 1').get(Number(req.query.service), salon.id);
   if (!service) return bad(res, 'Service not found.', 404);
   expireStaleHolds();
@@ -253,8 +298,8 @@ app.get('/api/public/:slug/slots', (req, res) => {
 });
 
 app.post('/api/public/:slug/book', limit('book', 15, 3600e3), (req, res) => {
-  const salon = getSalonBySlug(req.params.slug);
-  if (!salon) return bad(res, 'Salon not found.', 404);
+  const salon = openSalon(req, res);
+  if (!salon) return;
   const b = req.body || {};
   const service = db.prepare('SELECT * FROM services WHERE id = ? AND salon_id = ? AND active = 1').get(Number(b.serviceId), salon.id);
   if (!service) return bad(res, 'Please choose a service.');
@@ -290,38 +335,86 @@ app.get('/api/public/:slug/appointments/:code', (req, res) => {
   const a = db.prepare('SELECT * FROM appointments WHERE code = ? AND salon_id = ?').get(str(req.params.code, 12).toUpperCase(), salon.id);
   if (!a) { misses.push(now); hits.set(missKey, misses); return bad(res, 'Booking not found.', 404); }
   res.json({
-    appointment: { code: a.code, service: a.service_name, start: a.start_local, end: a.end_local, deposit: a.deposit, price: a.price, status: a.status, clientName: a.client_name },
+    appointment: {
+      code: a.code, service: a.service_name, start: a.start_local, end: a.end_local, deposit: a.deposit, price: a.price, status: a.status,
+      clientName: a.client_name, payMethod: a.pay_method, depositUsd: salon.usd_rate > 0 ? paypal.usdFor(salon, a.deposit) : null,
+    },
     salon: publicSalon(salon),
   });
 });
 
-// Client reports their MMG transaction so the owner can verify and confirm.
-app.post('/api/public/:slug/appointments/:code/payment', limit('pay', 20, 3600e3), (req, res) => {
-  const salon = getSalonBySlug(req.params.slug);
-  if (!salon) return bad(res, 'Salon not found.', 404);
+// The booking a payment action is for, if it can still take one. Sends the error itself and returns null.
+function payableAppt(req, res, salon, { allowSubmitted = false } = {}) {
   expireStaleHolds();
   const a = db.prepare('SELECT * FROM appointments WHERE code = ? AND salon_id = ?').get(str(req.params.code, 12).toUpperCase(), salon.id);
-  if (!a) return bad(res, 'Booking not found.', 404);
-  if (a.status === 'expired') return bad(res, 'This booking expired before payment was reported. Please book again.', 410);
-  if (!['pending_payment', 'payment_submitted'].includes(a.status)) return bad(res, 'This booking can no longer accept payment details.', 409);
+  if (!a) { bad(res, 'Booking not found.', 404); return null; }
+  if (a.status === 'expired') { bad(res, 'This booking expired before payment. Please book again.', 410); return null; }
+  const ok = allowSubmitted ? ['pending_payment', 'payment_submitted'] : ['pending_payment'];
+  if (!ok.includes(a.status)) { bad(res, 'This booking is not waiting for payment.', 409); return null; }
+  return a;
+}
+
+// Client reports a manual payment (MMG transfer or PayPal.me) so the owner can check it and confirm.
+app.post('/api/public/:slug/appointments/:code/payment', limit('pay', 20, 3600e3), (req, res) => {
+  const salon = openSalon(req, res);
+  if (!salon) return;
+  const a = payableAppt(req, res, salon, { allowSubmitted: true });
+  if (!a) return;
+  const method = req.body?.method === 'paypal_me' ? 'paypal_me' : 'mmg';
+  if (method === 'paypal_me' && !publicSalon(salon).paypal.me) return bad(res, 'This salon does not take PayPal.', 409);
   const ref = str(req.body?.reference, 60);
-  if (ref.length < 4) return bad(res, 'Please enter the MMG transaction ID from your receipt.');
-  db.prepare(`UPDATE appointments SET status = 'payment_submitted', payment_ref = ?, payment_submitted_at = datetime('now') WHERE id = ?`).run(ref, a.id);
-  notify('payment_reported', salon, { ...a, payment_ref: ref });
+  if (ref.length < 4) return bad(res, `Please enter the ${method === 'paypal_me' ? 'PayPal' : 'MMG'} transaction ID from your receipt.`);
+  db.prepare(`UPDATE appointments SET status = 'payment_submitted', payment_ref = ?, pay_method = ?, payment_submitted_at = datetime('now') WHERE id = ?`).run(ref, method, a.id);
+  notify('payment_reported', salon, { ...a, payment_ref: ref, pay_method: method });
   res.json({ ok: true });
 });
+
+// Client chooses to pay at the salon. No deposit is taken; the owner confirms (or cancels) the booking.
+app.post('/api/public/:slug/appointments/:code/cash', limit('pay', 20, 3600e3), (req, res) => {
+  const salon = openSalon(req, res);
+  if (!salon) return;
+  if (!salon.pay_cash) return bad(res, 'This salon does not take cash bookings online.', 409);
+  const a = payableAppt(req, res, salon);
+  if (!a) return;
+  db.prepare(`UPDATE appointments SET status = 'payment_submitted', pay_method = 'cash', payment_ref = '', payment_submitted_at = datetime('now') WHERE id = ?`).run(a.id);
+  notify('cash_chosen', salon, { ...a, pay_method: 'cash' });
+  res.json({ ok: true });
+});
+
+// A payment gateway (MMG or PayPal) says the deposit is paid: record it and decide the booking's fate in one transaction.
+// Confirms the booking unless the owner already cancelled it, or the hold expired and the slot has since gone.
+function recordGatewayPayment(salon, apptId, via, ref) {
+  const outcome = db.transaction(() => {
+    const a = db.prepare('SELECT * FROM appointments WHERE id = ?').get(apptId);
+    let status = 'confirmed';
+    if (a.status === 'cancelled' || a.status === 'confirmed') status = a.status; // owner already acted; just record payment
+    else if (a.status === 'expired') {
+      const clash = db.prepare(`SELECT COUNT(*) n FROM appointments WHERE salon_id = ? AND id != ?
+        AND status IN ('pending_payment','payment_submitted','confirmed') AND start_local < ? AND end_local > ?`)
+        .get(salon.id, a.id, a.end_local, a.start_local).n;
+      if (clash >= salon.capacity) status = 'payment_submitted';
+    }
+    db.prepare(`UPDATE appointments SET status = ?, payment_ref = ?, payment_submitted_at = datetime('now'), paid_via = ?, pay_method = ? WHERE id = ?`)
+      .run(status, ref, via, `${via}_checkout`, a.id);
+    return { before: a.status, after: status, appt: { ...a, status, payment_ref: ref, paid_via: via } };
+  })();
+  if (outcome.after === 'confirmed' && outcome.before !== 'confirmed') {
+    notify('paid_online', salon, outcome.appt);
+    google.syncConfirmed(salon, outcome.appt).catch((e) => console.error('Google sync error', e.message));
+  } else if (outcome.after === 'payment_submitted' || outcome.after === 'cancelled') {
+    notify('paid_online_conflict', salon, outcome.appt);
+  }
+  return outcome;
+}
 
 // ---------- MMG online checkout ----------
 // Client taps "Pay with MMG": create a checkout attempt and hand back MMG's payment page URL.
 app.post('/api/public/:slug/appointments/:code/mmg-checkout', limit('mmg', 20, 3600e3), (req, res) => {
-  const salon = getSalonBySlug(req.params.slug);
-  if (!salon) return bad(res, 'Salon not found.', 404);
+  const salon = openSalon(req, res);
+  if (!salon) return;
   if (!mmg.configured(salon)) return bad(res, 'This salon does not take MMG online payments yet.', 409);
-  expireStaleHolds();
-  const a = db.prepare('SELECT * FROM appointments WHERE code = ? AND salon_id = ?').get(str(req.params.code, 12).toUpperCase(), salon.id);
-  if (!a) return bad(res, 'Booking not found.', 404);
-  if (a.status === 'expired') return bad(res, 'This booking expired before payment. Please book again.', 410);
-  if (a.status !== 'pending_payment') return bad(res, 'This booking is not waiting for payment.', 409);
+  const a = payableAppt(req, res, salon);
+  if (!a) return;
   // Short but unique per attempt: the whole request has to fit in one RSA block.
   const txn = `${a.code}${Date.now().toString(36)}`.toUpperCase();
   try {
@@ -357,34 +450,84 @@ const mmgReturn = async (req, res) => {
   if (!/^[A-Za-z0-9-]{1,64}$/.test(r.transactionId)) { console.error('MMG success without valid transactionId'); return back(attempt.code, 'error'); }
   if (db.prepare('SELECT 1 FROM mmg_attempts WHERE mmg_txn_id = ?').get(r.transactionId)) return back(attempt.code, 'error');
 
-  // Record the payment and decide the booking's fate in one transaction.
-  const outcome = db.transaction(() => {
-    db.prepare('UPDATE mmg_attempts SET result_code = ?, mmg_txn_id = ? WHERE merchant_txn_id = ?').run('0', r.transactionId, attempt.merchant_txn_id);
-    const a = db.prepare('SELECT * FROM appointments WHERE id = ?').get(attempt.appointment_id);
-    let status = 'confirmed';
-    if (a.status === 'cancelled' || a.status === 'confirmed') status = a.status; // owner already acted; just record payment
-    else if (a.status === 'expired') {
-      // Paid after the hold ran out: only confirm if the slot is still free.
-      const clash = db.prepare(`SELECT COUNT(*) n FROM appointments WHERE salon_id = ? AND id != ?
-        AND status IN ('pending_payment','payment_submitted','confirmed') AND start_local < ? AND end_local > ?`)
-        .get(salon.id, a.id, a.end_local, a.start_local).n;
-      if (clash >= salon.capacity) status = 'payment_submitted';
-    }
-    db.prepare(`UPDATE appointments SET status = ?, payment_ref = ?, payment_submitted_at = datetime('now'), paid_via = 'mmg' WHERE id = ?`)
-      .run(status, r.transactionId, a.id);
-    return { before: a.status, after: status, appt: { ...a, status, payment_ref: r.transactionId } };
-  })();
-
-  if (outcome.after === 'confirmed' && outcome.before !== 'confirmed') {
-    notify('mmg_paid', salon, outcome.appt);
-    google.syncConfirmed(salon, outcome.appt).catch((e) => console.error('Google sync error', e.message));
-  } else if (outcome.after === 'payment_submitted' || outcome.after === 'cancelled') {
-    notify('mmg_paid_conflict', salon, outcome.appt);
-  }
+  db.prepare('UPDATE mmg_attempts SET result_code = ?, mmg_txn_id = ? WHERE merchant_txn_id = ?').run('0', r.transactionId, attempt.merchant_txn_id);
+  recordGatewayPayment(salon, attempt.appointment_id, 'mmg', r.transactionId);
   back(attempt.code, 'paid');
 };
 app.get('/api/mmg/return/:slug', mmgReturn);
 app.post('/api/mmg/return/:slug', express.urlencoded({ extended: false, limit: '20kb' }), mmgReturn);
+
+// ---------- PayPal checkout ----------
+// Client taps "Pay with PayPal": create an order for the USD deposit and hand back PayPal's approval page.
+app.post('/api/public/:slug/appointments/:code/paypal-checkout', limit('paypal', 20, 3600e3), async (req, res) => {
+  const salon = openSalon(req, res);
+  if (!salon) return;
+  if (!paypal.configured(salon)) return bad(res, 'This salon does not take PayPal checkout yet.', 409);
+  const a = payableAppt(req, res, salon);
+  if (!a) return;
+  const amountUsd = paypal.usdFor(salon, a.deposit);
+  try {
+    const order = await paypal.createOrder(salon, {
+      amountUsd, reference: a.code, description: `Deposit ${a.code}: ${a.service_name}`, requestId: crypto.randomUUID(),
+      returnUrl: `${BASE_URL}/api/paypal/return/${salon.slug}`, cancelUrl: `${BASE_URL}/api/paypal/cancel/${salon.slug}`,
+    });
+    db.prepare('INSERT INTO paypal_attempts (order_id, appointment_id, amount_usd) VALUES (?,?,?)').run(order.id, a.id, amountUsd);
+    res.json({ url: order.approveUrl });
+  } catch (e) {
+    console.error('PayPal checkout error', e.message);
+    bad(res, 'PayPal payment could not be started. Please try again or choose another way to pay.', 502);
+  }
+});
+
+// PayPal sends the client back here with ?token=<order id>. Capturing the order is what takes the money.
+app.get('/api/paypal/return/:slug', async (req, res) => {
+  const salon = getSalonBySlug(req.params.slug);
+  if (!salon) return res.status(404).send('Salon not found.');
+  const back = (code, flag) => res.redirect(`/s/${encodeURIComponent(salon.slug)}?${code ? `code=${encodeURIComponent(code)}&` : ''}paypal=${flag}`);
+  const orderId = str(req.query.token, 64);
+  const attempt = orderId && db.prepare(`SELECT t.*, a.code FROM paypal_attempts t JOIN appointments a ON a.id = t.appointment_id
+                                         WHERE t.order_id = ? AND a.salon_id = ?`).get(orderId, salon.id);
+  if (!attempt) return back('', 'error');
+  if (attempt.status === 'completed') return back(attempt.code, 'paid'); // already processed (page refresh / repeat)
+  if (!paypal.configured(salon)) return back(attempt.code, 'error');
+
+  let r;
+  try { r = await paypal.capture(salon, orderId, `capture-${orderId}`); }
+  catch (e) { console.error('PayPal capture error', e.message); return back(attempt.code, 'error'); }
+
+  if (r.status === 'failed') {
+    db.prepare("UPDATE paypal_attempts SET status = 'failed' WHERE order_id = ?").run(orderId);
+    return back(attempt.code, 'failed');
+  }
+  if (!r.captureId || db.prepare('SELECT 1 FROM paypal_attempts WHERE capture_id = ? AND order_id <> ?').get(r.captureId, orderId)) {
+    console.error('PayPal capture without a usable capture ID', orderId);
+    return back(attempt.code, 'error');
+  }
+  const amountOk = r.currency === 'USD' && Number(r.amount) >= Number(attempt.amount_usd);
+  if (r.status === 'completed' && amountOk) {
+    db.prepare("UPDATE paypal_attempts SET status = 'completed', capture_id = ? WHERE order_id = ?").run(r.captureId, orderId);
+    recordGatewayPayment(salon, attempt.appointment_id, 'paypal', r.captureId);
+    return back(attempt.code, 'paid');
+  }
+  // Money is on its way but not final (PayPal review, eCheck) or the amount looks wrong: the owner checks it.
+  if (!amountOk) console.error('PayPal amount mismatch', orderId, r.amount, r.currency, 'expected', attempt.amount_usd);
+  db.prepare("UPDATE paypal_attempts SET status = 'pending', capture_id = ? WHERE order_id = ?").run(r.captureId, orderId);
+  const a = db.prepare('SELECT * FROM appointments WHERE id = ?').get(attempt.appointment_id);
+  if (['pending_payment', 'expired'].includes(a.status)) {
+    db.prepare(`UPDATE appointments SET status = 'payment_submitted', payment_ref = ?, pay_method = 'paypal_checkout', payment_submitted_at = datetime('now') WHERE id = ?`)
+      .run(r.captureId, a.id);
+  }
+  notify('paypal_pending', salon, { ...a, payment_ref: r.captureId, pay_method: 'paypal_checkout' });
+  back(attempt.code, 'pending');
+});
+
+app.get('/api/paypal/cancel/:slug', (req, res) => {
+  const salon = getSalonBySlug(req.params.slug);
+  if (!salon) return res.status(404).send('Salon not found.');
+  const attempt = db.prepare(`SELECT a.code FROM paypal_attempts t JOIN appointments a ON a.id = t.appointment_id
+                              WHERE t.order_id = ? AND a.salon_id = ?`).get(str(req.query.token, 64), salon.id);
+  res.redirect(`/s/${encodeURIComponent(salon.slug)}?${attempt ? `code=${encodeURIComponent(attempt.code)}&` : ''}paypal=cancelled`);
+});
 
 // ---------- owner API ----------
 const admin = express.Router();
@@ -393,7 +536,12 @@ admin.use(requireOwner);
 admin.get('/me', (req, res) => {
   const { salon, owner } = req;
   res.json({
-    owner: { name: owner.name, email: owner.email, platformAdmin: isPlatformAdmin(owner) },
+    owner: { name: owner.name, email: owner.email, platformAdmin: isPlatformAdmin(owner), emailVerified: Boolean(owner.email_verified) },
+    live: takingBookings(salon), suspended: Boolean(salon.suspended_at),
+    payments: {
+      cash: Boolean(salon.pay_cash), usdRate: salon.usd_rate, paypalMe: salon.paypal_me,
+      paypal: { enabled: Boolean(salon.paypal_enabled), ready: paypal.configured(salon), mode: salon.paypal_mode, clientId: salon.paypal_client_id, hasSecret: Boolean(salon.paypal_secret) },
+    },
     google: { available: google.enabled(), connected: Boolean(owner.google_refresh_token), email: owner.google_email },
     salon: {
       slug: salon.slug, name: salon.name, phone: salon.phone, address: salon.address, timezone: salon.timezone,
@@ -419,15 +567,15 @@ admin.get('/me', (req, res) => {
 admin.put('/mmg', (req, res) => {
   const b = req.body || {}, s = req.salon;
   const pub = b.publicKey ? String(b.publicKey).trim().slice(0, 10000) : s.mmg_public_key;
-  const priv = b.privateKey ? String(b.privateKey).trim().slice(0, 10000) : s.mmg_private_key;
+  const priv = b.privateKey ? String(b.privateKey).trim().slice(0, 10000) : open(s.mmg_private_key);
   const keyErr = mmg.checkKey(pub, 'public') || mmg.checkKey(priv, 'private');
   if (keyErr) return bad(res, keyErr);
   const merchantId = str(b.merchantId ?? s.mmg_merchant_id, 30);
   if (merchantId && !/^\d{7,15}$/.test(merchantId)) return bad(res, 'Merchant ID should be the number on your MMG merchant account (digits only).');
   const next = {
     mmg_api_enabled: b.enabled ? 1 : 0, mmg_mode: b.mode === 'live' ? 'live' : 'sandbox', mmg_merchant_id: merchantId,
-    mmg_client_id: str(b.clientId ?? s.mmg_client_id, 120), mmg_secret_key: b.secretKey ? str(b.secretKey, 200) : s.mmg_secret_key,
-    mmg_public_key: pub, mmg_private_key: priv,
+    mmg_client_id: str(b.clientId ?? s.mmg_client_id, 120), mmg_secret_key: b.secretKey ? seal(str(b.secretKey, 200)) : s.mmg_secret_key,
+    mmg_public_key: pub, mmg_private_key: seal(priv),
   };
   if (next.mmg_api_enabled && !mmg.configured({ ...s, ...next })) return bad(res, 'Fill in every MMG field before turning online payments on.');
   if (next.mmg_api_enabled) {
@@ -448,12 +596,46 @@ admin.post('/mmg/keypair', limit('mmgkey', 10, 3600e3), async (req, res) => {
   try {
     const { privateKey } = await mmg.generateKeyPair();
     const off = s.mmg_private_key ? 0 : s.mmg_api_enabled;
-    db.prepare('UPDATE salons SET mmg_private_key = ?, mmg_api_enabled = ? WHERE id = ?').run(privateKey, off, s.id);
+    db.prepare('UPDATE salons SET mmg_private_key = ?, mmg_api_enabled = ? WHERE id = ?').run(seal(privateKey), off, s.id);
     res.json({ ok: true });
   } catch (e) {
     console.error('MMG key generation failed', e.message);
     bad(res, 'The key could not be created. Please try again.', 500);
   }
+});
+
+// Cash, PayPal.me and PayPal checkout. Blank secret keeps the stored one.
+admin.put('/payments', limit('payset', 30, 3600e3), async (req, res) => {
+  const b = req.body || {}, s = req.salon;
+  const rate = Number(b.usdRate ?? s.usd_rate);
+  if (!(rate >= 0 && rate < 100000)) return bad(res, 'The US dollar rate should be how many GYD make 1 USD, for example 210.');
+  const me = str(b.paypalMe ?? s.paypal_me, 40).replace(/^.*paypal\.me\//i, '').replace(/\/.*$/, '');
+  if (me && !paypal.validMeName(me)) return bad(res, 'PayPal.me name should be letters and numbers only, as in paypal.me/yourname.');
+  if (me && !(rate > 0)) return bad(res, 'Set the US dollar rate so PayPal deposits can be worked out in USD.');
+  const next = {
+    pay_cash: b.cash ? 1 : 0, usd_rate: rate, paypal_me: me,
+    paypal_enabled: b.paypalEnabled ? 1 : 0, paypal_mode: b.paypalMode === 'live' ? 'live' : 'sandbox',
+    paypal_client_id: str(b.paypalClientId ?? s.paypal_client_id, 200),
+    paypal_secret: b.paypalSecret ? seal(str(b.paypalSecret, 200)) : s.paypal_secret,
+  };
+  if (next.paypal_enabled) {
+    if (!next.paypal_client_id || !next.paypal_secret) return bad(res, 'Enter the PayPal client ID and secret before turning PayPal checkout on.');
+    if (!(rate > 0)) return bad(res, 'Set the US dollar rate before turning PayPal checkout on.');
+    // Only call PayPal when something it cares about changed.
+    if (b.paypalSecret || next.paypal_client_id !== s.paypal_client_id || next.paypal_mode !== s.paypal_mode || !s.paypal_enabled) {
+      try { await paypal.accessToken({ ...s, ...next }); } catch (e) { return bad(res, e.message); }
+    }
+  }
+  db.prepare(`UPDATE salons SET pay_cash=?, usd_rate=?, paypal_me=?, paypal_enabled=?, paypal_mode=?, paypal_client_id=?, paypal_secret=? WHERE id=?`)
+    .run(next.pay_cash, next.usd_rate, next.paypal_me, next.paypal_enabled, next.paypal_mode, next.paypal_client_id, next.paypal_secret, s.id);
+  res.json({ ok: true });
+});
+
+admin.post('/verify/resend', limit('verifyresend', 3, 3600e3), async (req, res) => {
+  if (req.owner.email_verified) return res.json({ ok: true });
+  if (!emailEnabled()) return bad(res, 'Email is not set up on this server.', 409);
+  await sendVerifyEmail(req.owner);
+  res.json({ ok: true });
 });
 
 // Each owner chooses whether they personally get notification emails.
@@ -603,6 +785,13 @@ function lastBackup() {
     return Number.isFinite(latest) ? new Date(latest).toISOString() : null;
   } catch { return null; }
 }
+// Written by the backup script after each Google Drive upload: "<ISO time> ok|failed|skipped <detail>".
+function offsiteStatus() {
+  try {
+    const [when, result, ...rest] = fs.readFileSync(path.join(BACKUP_DIR, 'offsite-status'), 'utf8').trim().split(' ');
+    return { when, result, detail: rest.join(' ') };
+  } catch { return null; }
+}
 function dbBytes() {
   const file = process.env.DB_PATH || path.join(__dirname, 'salonbook.db');
   return ['', '-wal'].reduce((n, ext) => { try { return n + fs.statSync(file + ext).size; } catch { return n; } }, 0);
@@ -618,7 +807,8 @@ platform.get('/stats', (req, res) => {
     bookings: one('SELECT COUNT(*) n FROM appointments').n,
     bookings30: one("SELECT COUNT(*) n FROM appointments WHERE created_at >= datetime('now','-30 days')").n,
     ...one(`SELECT COALESCE(SUM(deposit),0) deposits, COALESCE(SUM(price),0) value, COUNT(*) confirmed,
-                   COALESCE(SUM(paid_via = 'mmg'),0) paidByMmg FROM appointments WHERE status = 'confirmed'`),
+                   COALESCE(SUM(paid_via = 'mmg'),0) paidByMmg, COALESCE(SUM(paid_via = 'paypal'),0) paidByPaypal,
+                   COALESCE(SUM(pay_method = 'cash'),0) cash FROM appointments WHERE status = 'confirmed'`),
     mmgLive: one("SELECT COUNT(*) n FROM salons WHERE mmg_api_enabled = 1 AND mmg_mode = 'live'").n,
     mmgSandbox: one("SELECT COUNT(*) n FROM salons WHERE mmg_api_enabled = 1 AND mmg_mode <> 'live'").n,
     googleOwners: one('SELECT COUNT(*) n FROM owners WHERE google_refresh_token IS NOT NULL').n,
@@ -637,6 +827,8 @@ platform.get('/stats', (req, res) => {
 
   const salons = db.prepare(`
     SELECT s.id, s.slug, s.name, s.created_at AS createdAt, s.mmg_api_enabled AS mmgOn, s.mmg_mode AS mmgMode, s.mmg_number <> '' AS manualMmg,
+      s.suspended_at AS suspendedAt, s.pay_cash AS cash, s.paypal_enabled AS paypalOn, s.paypal_mode AS paypalMode, s.paypal_me <> '' AS paypalMe,
+      EXISTS (SELECT 1 FROM owners o WHERE o.salon_id = s.id AND o.email_verified = 1) AS verified,
       (SELECT group_concat(o.email, ', ') FROM owners o WHERE o.salon_id = s.id) AS owners,
       (SELECT COUNT(*) FROM owners o WHERE o.salon_id = s.id AND o.google_refresh_token IS NOT NULL) AS google,
       (SELECT COUNT(*) FROM services v WHERE v.salon_id = s.id AND v.active = 1) AS services,
@@ -648,15 +840,30 @@ platform.get('/stats', (req, res) => {
       MAX(a.created_at) AS lastBooking
     FROM salons s LEFT JOIN appointments a ON a.salon_id = s.id
     GROUP BY s.id ORDER BY bookings30 DESC, s.created_at DESC`).all()
-    .map((s) => ({ ...s, url: `${BASE_URL}/s/${s.slug}`, mmgOn: Boolean(s.mmgOn), manualMmg: Boolean(s.manualMmg) }));
+    .map((s) => ({
+      ...s, url: `${BASE_URL}/s/${s.slug}`, mmgOn: Boolean(s.mmgOn), manualMmg: Boolean(s.manualMmg),
+      cash: Boolean(s.cash), paypalOn: Boolean(s.paypalOn), paypalMe: Boolean(s.paypalMe), verified: Boolean(s.verified),
+      mine: s.id === req.owner.salon_id,
+    }));
 
   res.json({
     generatedAt: new Date().toISOString(), totals, byStatus, weeks, salons,
     system: {
-      baseUrl: BASE_URL, node: process.version, uptimeSec: Math.round(process.uptime()), dbBytes: dbBytes(), lastBackup: lastBackup(),
+      baseUrl: BASE_URL, node: process.version, uptimeSec: Math.round(process.uptime()), dbBytes: dbBytes(), lastBackup: lastBackup(), offsite: offsiteStatus(),
       email: emailEnabled(), google: google.enabled(), signup: REGISTRATION_CODE ? 'code' : 'open', platformAdmins: PLATFORM_ADMINS.size,
     },
   });
+});
+// Suspend or restore a salon. Suspended: booking page off, its owners can't sign in. Payments already
+// on their way (MMG/PayPal returns) are still recorded. You can't suspend the salon your own login belongs to.
+platform.post('/salons/:id/suspend', (req, res) => {
+  const s = db.prepare('SELECT id, name FROM salons WHERE id = ?').get(Number(req.params.id));
+  if (!s) return bad(res, 'Salon not found.', 404);
+  if (s.id === req.owner.salon_id) return bad(res, 'You can’t suspend the salon your own login belongs to.', 409);
+  const on = Boolean(req.body?.suspended);
+  db.prepare(`UPDATE salons SET suspended_at = ${on ? "datetime('now')" : 'NULL'} WHERE id = ?`).run(s.id);
+  console.log(`Platform: ${req.owner.email} ${on ? 'suspended' : 'restored'} salon ${s.id} (${s.name})`);
+  res.json({ ok: true });
 });
 app.use('/api/platform', platform);
 
@@ -673,7 +880,7 @@ app.get('/api/google/callback', async (req, res) => {
     const t = await google.exchangeCode(String(req.query.code));
     if (!t.refresh_token) return res.redirect('/admin.html?google=error');
     db.prepare('UPDATE owners SET google_refresh_token = ?, google_email = ? WHERE id = ?')
-      .run(t.refresh_token, google.emailFromIdToken(t.id_token), st.oid);
+      .run(seal(t.refresh_token), google.emailFromIdToken(t.id_token), st.oid);
     google.backfillOwner(st.oid).catch((e) => console.error('Backfill error', e.message));
     res.redirect('/admin.html?google=connected');
   } catch (e) {

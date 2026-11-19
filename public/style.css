@@ -154,6 +154,11 @@ header.top :focus-visible { outline-color: var(--color-accent-ink); }
 #status .card { padding: var(--space-lg); border: 1px solid var(--color-rule); border-radius: var(--radius-card); }
 #status .card > * + * { margin-top: var(--space-sm); }
 #status form button[type="submit"] { width: 100%; min-height: 48px; margin-top: var(--space-xs); }
+#status .pay-buttons { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+#status .pay-buttons button { flex: 1 1 12rem; min-height: 48px; }
+#status details, #status .pay-cash { border-top: 1px solid var(--color-rule); padding-top: var(--space-sm); }
+#status details summary { cursor: pointer; font-weight: 600; color: var(--color-accent); min-height: 44px; display: flex; align-items: center; }
+#status .pay-cash > * + * { margin-top: var(--space-xs); }
 .ticket { display: grid; gap: var(--space-2xs); }
 .ticket .code { margin-left: var(--space-2xs); }
 

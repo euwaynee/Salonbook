@@ -84,11 +84,26 @@ for (const [col, def] of [
   ['mmg_private_key', "TEXT NOT NULL DEFAULT ''"],
 ]) if (!salonCols.includes(col)) db.exec(`ALTER TABLE salons ADD COLUMN ${col} ${def}`);
 
+// Suspended by a platform admin: booking page and owner logins stop working until lifted.
+if (!salonCols.includes('suspended_at')) db.exec('ALTER TABLE salons ADD COLUMN suspended_at TEXT');
+// Other payment options. PayPal can't take GYD, so PayPal deposits are charged in USD at usd_rate (GYD per 1 USD).
+for (const [col, def] of [
+  ['pay_cash', 'INTEGER NOT NULL DEFAULT 0'], ['usd_rate', 'REAL NOT NULL DEFAULT 0'], ['paypal_me', "TEXT NOT NULL DEFAULT ''"],
+  ['paypal_enabled', 'INTEGER NOT NULL DEFAULT 0'], ['paypal_mode', "TEXT NOT NULL DEFAULT 'sandbox'"],
+  ['paypal_client_id', "TEXT NOT NULL DEFAULT ''"], ['paypal_secret', "TEXT NOT NULL DEFAULT ''"],
+]) if (!salonCols.includes(col)) db.exec(`ALTER TABLE salons ADD COLUMN ${col} ${def}`);
+
 const ownerCols = db.prepare('PRAGMA table_info(owners)').all().map((c) => c.name);
 if (!ownerCols.includes('notify_email')) db.exec('ALTER TABLE owners ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1');
+if (!ownerCols.includes('email_verified')) {
+  db.exec('ALTER TABLE owners ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0');
+  db.exec('UPDATE owners SET email_verified = 1'); // accounts from before verification existed count as verified
+}
 
 const apptCols = db.prepare('PRAGMA table_info(appointments)').all().map((c) => c.name);
-if (!apptCols.includes('paid_via')) db.exec("ALTER TABLE appointments ADD COLUMN paid_via TEXT NOT NULL DEFAULT ''"); // '' | 'mmg'
+if (!apptCols.includes('paid_via')) db.exec("ALTER TABLE appointments ADD COLUMN paid_via TEXT NOT NULL DEFAULT ''"); // '' | 'mmg' | 'paypal': confirmed by the gateway itself
+// How the client chose to pay: 'mmg' (manual transfer) | 'mmg_checkout' | 'paypal_me' | 'paypal_checkout' | 'cash'
+if (!apptCols.includes('pay_method')) db.exec("ALTER TABLE appointments ADD COLUMN pay_method TEXT NOT NULL DEFAULT ''");
 
 // One row per MMG checkout attempt (a client may cancel and retry; MMG needs a fresh ID each time).
 db.exec(`
@@ -101,6 +116,17 @@ CREATE TABLE IF NOT EXISTS mmg_attempts (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mmg_attempt_txn ON mmg_attempts(mmg_txn_id) WHERE mmg_txn_id IS NOT NULL;
+
+-- One row per PayPal order. The order is only captured (money taken) when the client comes back to us.
+CREATE TABLE IF NOT EXISTS paypal_attempts (
+  order_id TEXT PRIMARY KEY,
+  appointment_id INTEGER NOT NULL REFERENCES appointments(id) ON DELETE CASCADE,
+  amount_usd TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'created',   -- created | completed | pending | failed
+  capture_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paypal_capture ON paypal_attempts(capture_id) WHERE capture_id IS NOT NULL;
 `);
 
 module.exports = db;

@@ -55,24 +55,36 @@ const details = (a) => [
   a.notes ? `Notes:    ${a.notes}` : '',
 ].filter(Boolean).join('\n');
 
+const GATEWAY = { mmg: 'MMG', paypal: 'PayPal' };
 const TEMPLATES = {
   booked: (a) => ({
     subject: `New booking: ${a.client_name}, ${when(a.start_local)}`,
-    lead: 'A client just booked. The slot is held until they pay the deposit.',
+    lead: 'A client just booked. The slot is held until they pay the deposit or choose to pay at the salon.',
   }),
-  payment_reported: (a) => ({
-    subject: `Check MMG: ${a.client_name} says they paid ${money(a.deposit)}`,
-    lead: `The client reported MMG transaction ID ${a.payment_ref}. Check that the money arrived, then confirm the booking in your dashboard.`,
+  payment_reported: (a) => {
+    const via = a.pay_method === 'paypal_me' ? 'PayPal' : 'MMG';
+    return {
+      subject: `Check ${via}: ${a.client_name} says they paid ${money(a.deposit)}`,
+      lead: `The client reported ${via} transaction ID ${a.payment_ref}. Check that the money arrived, then confirm the booking in your dashboard.`,
+    };
+  },
+  cash_chosen: (a) => ({
+    subject: `Cash booking: ${a.client_name}, ${when(a.start_local)}`,
+    lead: `The client chose to pay ${money(a.price)} in cash at the salon, with no deposit. Confirm or cancel the booking in your dashboard.`,
   }),
-  mmg_paid: (a) => ({
-    subject: `Paid via MMG: ${a.client_name}, ${when(a.start_local)}`,
-    lead: `MMG confirmed the ${money(a.deposit)} deposit (transaction ${a.payment_ref}). The booking is confirmed automatically.`,
+  paid_online: (a) => ({
+    subject: `Paid via ${GATEWAY[a.paid_via]}: ${a.client_name}, ${when(a.start_local)}`,
+    lead: `${GATEWAY[a.paid_via]} confirmed the ${money(a.deposit)} deposit (transaction ${a.payment_ref}). The booking is confirmed automatically.`,
   }),
-  mmg_paid_conflict: (a) => ({
+  paid_online_conflict: (a) => ({
     subject: `Action needed: ${a.client_name} paid but the booking can't be confirmed`,
-    lead: `MMG confirmed the ${money(a.deposit)} deposit (transaction ${a.payment_ref}), but ${a.status === 'cancelled'
+    lead: `${GATEWAY[a.paid_via]} confirmed the ${money(a.deposit)} deposit (transaction ${a.payment_ref}), but ${a.status === 'cancelled'
       ? 'the booking had already been cancelled'
       : 'the hold had already expired and the slot was taken'}. Contact the client to rebook or refund.`,
+  }),
+  paypal_pending: (a) => ({
+    subject: `Check PayPal: ${a.client_name}'s deposit isn't final yet`,
+    lead: `PayPal took the deposit (transaction ${a.payment_ref}) but marked it pending, or the amount didn't match. Check it in your PayPal account, then confirm the booking in your dashboard.`,
   }),
   test: () => ({ subject: 'SalonBook test email', lead: 'Email notifications are working.' }),
 };

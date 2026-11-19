@@ -24,7 +24,15 @@ Set `REGISTRATION_CODE` in `.env` if you don't want strangers creating salons on
 Put your owner login email in `PLATFORM_ADMINS` in `.env` (comma-separate several) and restart. That login then
 gets a **Platform** button on the dashboard, opening `/platform.html`: totals, bookings and new salons per week,
 every salon with its bookings, deposits and MMG status, and server health (database size, last backup).
-It is read-only and never shows clients' names or phone numbers, or anyone's keys or passwords.
+It never shows clients' names or phone numbers, or anyone's keys or passwords. Its only action is **Suspend / Restore**
+on each salon: a suspended salon's booking page goes offline and its owners can't sign in; nothing is deleted, and
+payments already under way are still recorded. You can't suspend the salon your own login belongs to.
+
+### Email confirmation
+
+When email is set up (SMTP in `.env`), a new salon's booking page stays off until an owner clicks the confirmation
+link emailed at sign-up (valid 48 hours; the dashboard has a "Send it again" button). Accounts that existed before
+this feature count as confirmed. Without SMTP, new accounts start confirmed, since there's no way to send the link.
 
 ## How a booking works
 
@@ -62,6 +70,28 @@ Google requires **HTTPS** redirect URIs except for `localhost`, so a public depl
 - **Double-booking:** availability is rechecked on the server at booking time. "Stylists working at once" lets a salon take more than one client per time slot.
 - **Times** are stored as local wall-clock time in the salon's timezone (default `America/Guyana`).
 - Passwords are bcrypt-hashed; sessions are signed HttpOnly cookies; booking/login endpoints are rate-limited.
+- **Stored secrets are encrypted** (AES-256-GCM): MMG secret and private keys, PayPal secrets and Google Calendar refresh tokens. The key is `DATA_KEY` in `.env` or, if unset, the `.data_key` file created on first run. A copy of `salonbook.db` alone can't reveal them, and **without the key they can't be recovered**, so the backup includes it. Older plain-text values are encrypted automatically at startup (`secrets.js`).
+
+## Backups
+
+`backup.sh` runs nightly from cron (`30 3 * * * /home/casper/salonbook/backup.sh >> …/salonbook-backups/backup.log 2>&1`):
+
+1. A consistent, integrity-checked snapshot of the database, plus `.env`, `.data_key` and `.session_secret`, kept 30 days in `../salonbook-backups/`.
+2. If Google Drive is connected, all of that is encrypted (GPG, AES-256) with the passphrase in `~/.config/salonbook/backup-pass` and uploaded to `SalonBook-backups/` on Drive, kept 60 days. The Platform page shows the last upload and flags failures.
+
+**Keep a copy of the passphrase somewhere other than this server** (a password manager). If the server is lost, the Drive copies can't be opened without it.
+
+**Connect Google Drive** (once): run `~/.local/bin/rclone config` → `n` (new remote) → name it `gdrive` → storage `drive` → leave client ID/secret blank → scope `drive.file` (rclone can only see files it created) → no advanced config → for "use web browser", answer `n` on a server without a browser and follow the `rclone authorize "drive"` instructions on a computer that has one → not a shared drive → confirm. Then test with `./backup.sh` and check the Platform page.
+
+**Restore** on a fresh server:
+
+```sh
+rclone copy gdrive:SalonBook-backups/salonbook-<date>.tar.gpg .
+gpg --batch --passphrase-file backup-pass -d salonbook-<date>.tar.gpg | tar -xf -
+gunzip -c salonbook-<date>.db.gz > salonbook/salonbook.db
+cp env-<date> salonbook/.env; cp data_key-<date> salonbook/.data_key; cp session_secret-<date> salonbook/.session_secret
+chmod 600 salonbook/.env salonbook/.data_key salonbook/.session_secret
+```
 
 ## MMG online checkout (optional)
 
@@ -69,7 +99,7 @@ If a salon has an **MMG merchant account**, clients can pay the deposit on MMG's
 
 1. Apply for MMG e-commerce / Merchant Checkout access ([mmg.gy/developer](https://mmg.gy/developer/)). MMG gives you a **Merchant ID**, **Client ID**, **Secret Key** and RSA key pair(s).
 2. Give MMG your **Response URL**: `BASE_URL/api/mmg/return/<your-salon>` (shown under Settings → MMG online payments). It must be a public HTTPS address in live mode.
-3. Settings → **MMG online payments**: paste the IDs, secret key, MMG's public key and your private key. Start in **Sandbox**, make a test booking, then switch to **Live**.
+3. Settings → **MMG online payments**: paste the IDs, secret key and MMG's public key, then click **Create my public key** and send that key to MMG. (A salon that already gave MMG its own key can paste the private key instead.) Start in **Sandbox**, make a test booking, then switch to **Live**.
 
 How it works: the payment request is encrypted with MMG's public key (RSA-OAEP, SHA-256 by default) and the client is redirected to MMG. MMG redirects back with an encrypted result, which is decrypted with your private key. Result code `0` confirms the booking, adds it to Google Calendar and emails the owners. If the client pays after the hold expired and the slot has been taken, the booking is left as "Payment reported" and the owners are emailed to sort it out.
 
@@ -77,9 +107,19 @@ The manual flow (client sends to your MMG number and types the transaction ID) s
 
 > Built from MMG's published Merchant Checkout docs plus a community WooCommerce plugin. MMG's docs don't state the RSA padding. If the sandbox returns "Token Decryption Failed", set `MMG_OAEP_HASH=sha1` in `.env` and restart.
 
+## Cash and PayPal (optional)
+
+Under Settings → **Other ways to pay** each salon can add, alongside MMG:
+
+- **Cash at the salon.** The client books with no deposit; the booking shows as "Payment reported · Cash at the salon" and the owner confirms or cancels it.
+- **PayPal.me.** The client sends the deposit through `paypal.me/<name>/<amount>USD` and types in the PayPal transaction ID; the owner checks it and confirms (like manual MMG).
+- **PayPal checkout.** The client pays on PayPal's page and the booking confirms itself. The salon creates a REST app at [developer.paypal.com](https://developer.paypal.com) (Apps & Credentials) and pastes its client ID and secret; SalonBook checks them with PayPal on save. Money is only captured when the client returns to SalonBook, so an abandoned checkout never charges anyone. A capture PayPal marks pending, or one for the wrong amount, is left for the owner to check.
+
+PayPal doesn't support GYD, so PayPal deposits are charged in **USD at the salon's own rate** (GYD per 1 USD), rounded up to the cent. The salon's PayPal account must be able to receive payments: accounts registered in Guyana generally can only send, so this suits salons with a PayPal account from another country.
+
 ## Email notifications
 
-Owners get an email when a client books, reports a manual MMG payment, or pays through MMG checkout. Configure SMTP in `.env` (see `.env.example`; for Gmail use an App Password). Each owner can turn their own emails on or off, and send a test, under Settings → Notifications. Notification channels live in `notify.js`, so WhatsApp/SMS can be added there later.
+Owners get an email when a client books, reports a manual MMG or PayPal.me payment, chooses cash, or pays through MMG or PayPal checkout. Configure SMTP in `.env` (see `.env.example`; for Gmail use an App Password). Each owner can turn their own emails on or off, and send a test, under Settings → Notifications. Notification channels live in `notify.js`, so WhatsApp/SMS can be added there later.
 
 ## Forgotten passwords
 
@@ -91,4 +131,4 @@ Owners get an email when a client books, reports a manual MMG payment, or pays t
 
 ## Not included (ideas for next)
 
-SMS/WhatsApp notifications, client emails, per-stylist calendars, client self-cancel/reschedule, deposit refunds.
+SMS/WhatsApp notifications, client emails, per-stylist calendars, client self-cancel/reschedule, deposit refunds, closed days/holidays.

@@ -1,6 +1,7 @@
 // Google Calendar sync using plain REST (no googleapis dependency).
 // Each salon owner connects their own Google account via OAuth; we store the refresh token.
 const db = require('./db');
+const { open } = require('./secrets');
 
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -43,7 +44,7 @@ const exchangeCode = (code) =>
 
 async function accessTokenFor(owner) {
   if (!owner.google_refresh_token) throw new Error('Google Calendar not connected');
-  const t = await tokenRequest({ refresh_token: owner.google_refresh_token, grant_type: 'refresh_token' });
+  const t = await tokenRequest({ refresh_token: open(owner.google_refresh_token), grant_type: 'refresh_token' });
   return t.access_token;
 }
 
