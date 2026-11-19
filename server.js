@@ -162,6 +162,9 @@ const setSession = (res, ownerId) =>
     httpOnly: true, sameSite: 'lax', secure: SECURE_COOKIE, maxAge: 14 * 864e5,
   });
 
+// Lets the sign-up page show the registration code field only when one is required.
+app.get('/api/auth/options', (req, res) => res.json({ codeRequired: Boolean(REGISTRATION_CODE) }));
+
 app.post('/api/auth/register', limit('register', 10, 3600e3), (req, res) => {
   const { salonName, name, email, password, code } = req.body || {};
   if (REGISTRATION_CODE && code !== REGISTRATION_CODE) return bad(res, 'Invalid registration code.', 403);

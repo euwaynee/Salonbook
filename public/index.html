@@ -57,9 +57,9 @@
           <input id="up-email" type="email" autocomplete="username" required>
           <label for="up-pass">Password (8+ characters)</label>
           <input id="up-pass" type="password" autocomplete="new-password" minlength="8" required>
-          <div id="code-wrap">
-            <label for="up-code">Registration code (if you were given one)</label>
-            <input id="up-code">
+          <div id="code-wrap" class="hide">
+            <label for="up-code">Registration code</label>
+            <input id="up-code" autocomplete="off">
           </div>
           <div class="err" id="err-up" role="alert"></div>
           <button type="submit">Create my salon</button>
@@ -92,6 +92,11 @@ async function post(url, body) {
   if (!r.ok) throw new Error(d.error || 'Something went wrong.');
   return d;
 }
+// Only show the registration code field when the server requires one.
+fetch('/api/auth/options').then((r) => r.json()).then((o) => {
+  $('code-wrap').classList.toggle('hide', !o.codeRequired);
+  $('up-code').required = Boolean(o.codeRequired);
+}).catch(() => {});
 // If already signed in, go straight to the dashboard.
 fetch('/api/admin/me').then((r) => { if (r.ok) location.replace('/admin.html'); });
 
