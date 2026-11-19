@@ -82,6 +82,15 @@ const TEMPLATES = {
       ? 'the booking had already been cancelled'
       : 'the hold had already expired and the slot was taken'}. Contact the client to rebook or refund.`,
   }),
+  client_cancelled: (a) => ({
+    subject: `Cancelled by client: ${a.client_name}, ${when(a.start_local)}`,
+    lead: `The client cancelled through their booking link. The time is free again.${a.payment_ref || a.paid_via
+      ? ` They had paid a ${money(a.deposit)} deposit (ref ${a.payment_ref || 'n/a'}); refunds are up to you and your cancellation policy.` : ''}`,
+  }),
+  client_rescheduled: (a) => ({
+    subject: `Moved by client: ${a.client_name}, now ${when(a.start_local)}`,
+    lead: `The client moved their appointment from ${when(a.old_start)} to ${when(a.start_local)}.${a.status === 'confirmed' ? ' Your Google Calendar is updated if connected.' : ''}`,
+  }),
   paypal_pending: (a) => ({
     subject: `Check PayPal: ${a.client_name}'s deposit isn't final yet`,
     lead: `PayPal took the deposit (transaction ${a.payment_ref}) but marked it pending, or the amount didn't match. Check it in your PayPal account, then confirm the booking in your dashboard.`,
@@ -116,7 +125,13 @@ const CLIENT_TEMPLATES = {
   }),
   cancelled: (a, s) => ({
     subject: `Your appointment at ${s.name} was cancelled`,
-    lead: `Your ${a.service_name} appointment on ${when(a.start_local)} has been cancelled by the salon. If you didn't expect this, please contact them.`,
+    lead: a.cancelled_by === 'client'
+      ? `As you asked, your ${a.service_name} appointment on ${when(a.start_local)} is cancelled.${a.payment_ref || a.paid_via ? ' About your deposit, please contact the salon.' : ''}`
+      : `Your ${a.service_name} appointment on ${when(a.start_local)} has been cancelled by the salon. If you didn't expect this, please contact them.`,
+  }),
+  rescheduled: (a, s) => ({
+    subject: `Your appointment at ${s.name} is now ${when(a.start_local)}`,
+    lead: 'Your appointment has been moved to the new time below.',
   }),
 };
 const toPay = (a) => (a.pay_method === 'cash' ? a.price : Math.max(0, a.price - a.deposit));
@@ -133,6 +148,8 @@ function notifyClient(kind, salon, a, { link } = {}) {
     kind !== 'cancelled' && toPay(a) > 0 ? `To pay at the salon: ${money(toPay(a))}${a.pay_method === 'cash' ? ' (cash)' : ''}` : null,
     '',
     kind !== 'cancelled' && link ? `Your booking: ${link}` : null,
+    kind !== 'cancelled' && link && salon.client_changes
+      ? `To cancel or move it, use the link above${salon.change_cutoff_hours ? ` up to ${salon.change_cutoff_hours} hours before` : ''}.` : null,
     salon.phone ? `Need to change something? Contact ${salon.name}: ${salon.phone}` : `Need to change something? Contact ${salon.name}.`,
     '', `— ${salon.name}, booked through SalonBook. Please don't reply to this email; it isn't read.`,
   ].filter((l) => l !== null);

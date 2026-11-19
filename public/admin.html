@@ -248,6 +248,26 @@
       </div>
     </form>
 
+    <form class="set" id="client-changes-form">
+      <header>
+        <h3>Client cancellations and changes</h3>
+        <p class="muted">Clients can cancel or move their own booking from their booking link. You get an email each time, and the time frees up or moves in your calendar. Deposits are never refunded automatically.</p>
+      </header>
+      <div>
+        <label class="check"><input type="checkbox" id="cc-on"> Let clients cancel or move their own bookings</label>
+        <label for="cc-hours">Up to</label>
+        <select id="cc-hours">
+          <option value="0">Any time before the appointment</option><option value="2">2 hours before</option><option value="12">12 hours before</option>
+          <option value="24">1 day before</option><option value="48">2 days before</option><option value="72">3 days before</option>
+        </select>
+        <label for="cc-policy">Your cancellation policy <span class="muted">(optional, shown to clients, e.g. what happens to the deposit)</span></label>
+        <textarea id="cc-policy" rows="2" maxlength="300" placeholder="Deposits are refunded for cancellations made 24 hours ahead."></textarea>
+        <p class="muted">Each booking can be moved up to 3 times. Unpaid bookings can always be cancelled, which frees the time.</p>
+        <div class="err" id="err-cc" role="alert"></div>
+        <div class="save-bar"><button type="submit">Save</button> <span id="cc-saved" class="ok-msg"></span></div>
+      </div>
+    </form>
+
     <div class="set">
       <header>
         <h3>Notifications</h3>
@@ -338,7 +358,8 @@ async function loadAppts() {
     html += `<article class="appt">
       <div class="time">${fmtTime(a.start.slice(11))}<span class="muted">to ${fmtTime(a.end.slice(11))}</span></div>
       <div>
-        <p class="appt-head"><b>${esc(a.clientName)}</b> <span class="badge b-${a.status}">${STATUS[a.status]}</span>
+        <p class="appt-head"><b>${esc(a.clientName)}</b> <span class="badge b-${a.status}">${a.status === 'cancelled' && a.cancelledBy === 'client' ? 'Cancelled by client' : STATUS[a.status]}</span>
+          ${a.rescheduleCount ? `<span class="synced">Moved by client${a.rescheduleCount > 1 ? ` ${a.rescheduleCount}×` : ''}</span>` : ''}
           ${a.synced ? '<span class="synced">In Google Calendar</span>' : ''}</p>
         <p class="appt-svc">${esc(a.service)}</p>
         <dl class="facts">
@@ -516,6 +537,19 @@ $('client-email-form').onsubmit = async (e) => {
   } catch (x) { $('err-ce').textContent = x.message; }
 };
 
+// ---------- client cancellations and changes ----------
+function fillClientChanges() {
+  const c = ME.clientChanges;
+  $('cc-on').checked = c.enabled; $('cc-hours').value = String(c.cutoffHours); $('cc-policy').value = c.policy;
+}
+$('client-changes-form').onsubmit = async (e) => {
+  e.preventDefault(); $('err-cc').textContent = ''; $('cc-saved').textContent = '';
+  try {
+    await api('PUT', '/api/admin/client-changes', { enabled: $('cc-on').checked, cutoffHours: Number($('cc-hours').value), policy: $('cc-policy').value });
+    ME = await api('GET', '/api/admin/me'); fillClientChanges(); $('cc-saved').textContent = 'Saved';
+  } catch (x) { $('err-cc').textContent = x.message; }
+};
+
 // ---------- cash + PayPal ----------
 function fillPayments() {
   const p = ME.payments;
@@ -654,7 +688,7 @@ function renderVerify(flag) {
   try { ME = await api('GET', '/api/admin/me'); }
   catch (x) { $('main').innerHTML = `<div class="card"><h2>Can’t open your dashboard</h2><p>${esc(x.message)}</p></div>`; return; }
   $('platform-link').classList.toggle('hide', !ME.owner.platformAdmin);
-  fillSettings(); fillMmg(); fillPayments(); fillClientEmails(); renderNotify(); renderGoogle();
+  fillSettings(); fillMmg(); fillPayments(); fillClientEmails(); fillClientChanges(); renderNotify(); renderGoogle();
   const q = new URLSearchParams(location.search);
   renderVerify(q.get('verified'));
   if (q.get('verified')) history.replaceState(null, '', '/admin.html' + (q.get('welcome') ? '?welcome=1' : ''));

@@ -60,7 +60,9 @@ function eventBody(appt, salon) {
     `Service: ${appt.service_name}`,
     `Client: ${appt.client_name} (${appt.client_phone})`,
     appt.client_email ? `Email: ${appt.client_email}` : null,
-    `Deposit paid via MMG: GYD ${appt.deposit}${appt.payment_ref ? ` (ref ${appt.payment_ref})` : ''}`,
+    appt.pay_method === 'cash'
+      ? `Paying cash at the salon: GYD ${appt.price}`
+      : `Deposit: GYD ${appt.deposit}${appt.pay_method?.startsWith('paypal') ? ' via PayPal' : ' via MMG'}${appt.payment_ref ? ` (ref ${appt.payment_ref})` : ''}`,
     appt.notes ? `Notes: ${appt.notes}` : null,
     `Booking code: ${appt.code}`,
   ].filter(Boolean);

@@ -117,6 +117,19 @@ Under Settings → **Other ways to pay** each salon can add, alongside MMG:
 
 PayPal doesn't support GYD, so PayPal deposits are charged in **USD at the salon's own rate** (GYD per 1 USD), rounded up to the cent. The salon's PayPal account must be able to receive payments: accounts registered in Guyana generally can only send, so this suits salons with a PayPal account from another country.
 
+## Client cancellations and changes
+
+Clients can cancel or move their own booking from their booking page. The link in every client email (and the browser
+they booked in) carries a private token; anyone opening the page with just the booking code confirms the last 4 digits
+of the phone they booked with (5 tries an hour). Under Settings → **Client cancellations and changes** each salon sets:
+
+- on/off, and how late changes are allowed (any time, or 2 hours to 3 days before). Unpaid bookings can always be cancelled.
+- an optional cancellation policy shown to clients (e.g. about deposits). Deposits are never refunded automatically.
+
+Moving keeps the booking's status and payment, frees the old time, moves the Google Calendar events, and re-arms the
+reminder. A booking can be moved 3 times. Owners get an email for every client cancellation or move, and the dashboard
+marks them ("Cancelled by client", "Moved by client").
+
 ## Email notifications
 
 Owners get an email when a client books, reports a manual MMG or PayPal.me payment, chooses cash, or pays through MMG or PayPal checkout. Configure SMTP in `.env` (see `.env.example`; for Gmail use an App Password). Each owner can turn their own emails on or off, and send a test, under Settings → Notifications. Notification channels live in `notify.js`, so WhatsApp/SMS can be added there later.
@@ -131,4 +144,4 @@ Owners get an email when a client books, reports a manual MMG or PayPal.me payme
 
 ## Not included (ideas for next)
 
-SMS/WhatsApp notifications, client emails, per-stylist calendars, client self-cancel/reschedule, deposit refunds, closed days/holidays.
+Automatic SMS/WhatsApp messages, per-stylist calendars, deposit refunds through MMG/PayPal.

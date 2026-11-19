@@ -132,7 +132,7 @@ $('step-details').onsubmit = async (e) => {
       serviceId: sel.service.id, date: sel.date, time: sel.time,
       name: $('c-name').value, phone: $('c-phone').value, email: $('c-email').value, notes: $('c-notes').value,
     });
-    history.replaceState(null, '', `${location.pathname}?code=${r.code}`);
+    history.replaceState(null, '', `${location.pathname}?code=${r.code}&t=${encodeURIComponent(r.token)}`);
     showStatus(r.code);
   } catch (x) {
     $('err-book').textContent = x.message; $('book-btn').disabled = false;
@@ -145,7 +145,7 @@ let poll;
 async function showStatus(code) {
   $('flow').classList.add('hide'); $('status').classList.remove('hide'); clearTimeout(poll);
   let d;
-  try { d = await call('GET', `${API}/appointments/${encodeURIComponent(code)}`); }
+  try { d = await call('GET', `${API}/appointments/${encodeURIComponent(code)}?t=${encodeURIComponent(manageT())}`); }
   catch (x) { $('status').innerHTML = `<div class="card"><h2>Booking not found</h2><p class="muted">${esc(x.message)}</p><a href="${location.pathname}">Start a new booking</a></div>`; return; }
   const a = d.appointment, s = d.salon, m = s.mmg, pp = s.paypal;
   const when = `${esc(fmtDate(a.start.slice(0, 10)))} at ${fmtTime(a.start.slice(11))}`;
@@ -222,11 +222,13 @@ async function showStatus(code) {
       ${d.salon.address ? `<p class="muted">${esc(d.salon.address)}</p>` : ''}
       ${d.salon.phone ? `<p class="muted">Need to change something? Contact the salon: ${esc(d.salon.phone)}</p>` : ''}</div>`;
   } else {
-    body = `<div class="card"><h2>${a.status === 'expired' ? 'This booking expired' : 'This booking was cancelled'}</h2>
-      <p class="muted">${a.status === 'expired' ? 'The deposit was not reported in time, so the slot was released.' : 'If this is unexpected, please contact the salon.'}</p>
+    const byClient = a.status === 'cancelled' && a.cancelledBy === 'client';
+    body = `<div class="card"><h2>${a.status === 'expired' ? 'This booking expired' : byClient ? 'You cancelled this booking' : 'This booking was cancelled'}</h2>
+      <p class="muted">${a.status === 'expired' ? 'The deposit was not reported in time, so the slot was released.'
+        : byClient ? 'Your time has been released. If you paid a deposit, please contact the salon about it.' : 'If this is unexpected, please contact the salon.'}</p>
       <a class="btn" href="${location.pathname}">Book again</a></div>`;
   }
-  $('status').innerHTML = head + body;
+  $('status').innerHTML = head + body + manageCard(d);
 
   const base = `${API}/appointments/${encodeURIComponent(code)}`;
   $('status').querySelectorAll('[data-checkout]').forEach((btn) => btn.onclick = async () => {
@@ -247,12 +249,81 @@ async function showStatus(code) {
     try { await call('POST', `${base}/cash`); showStatus(code); }
     catch (x) { $('err-cash').textContent = x.message; cb.disabled = false; }
   };
-  // Refresh status every 20s (skipped while the client is typing a transaction ID or has a payment section open).
+  wireManage(d, code);
+  // Refresh status every 20s (skipped while the client is typing, has a payment section open, or is choosing a new time).
   if (['pending_payment', 'payment_submitted'].includes(a.status)) {
-    const busy = () => document.activeElement?.classList.contains('ref') || (a.status === 'pending_payment' && $('status').querySelector('details[open]'));
+    const busy = () => document.activeElement?.matches('input') || $('move-panel')?.classList.contains('hide') === false
+      || (a.status === 'pending_payment' && $('status').querySelector('.card details[open]'));
     const tick = () => { if (busy()) poll = setTimeout(tick, 20000); else showStatus(code); };
     poll = setTimeout(tick, 20000);
   }
+}
+
+// ---------- client changes (cancel / move) ----------
+const manageT = () => new URLSearchParams(location.search).get('t') || '';
+function manageCard(d) {
+  const a = d.appointment, mg = d.manage;
+  if (!['pending_payment', 'payment_submitted', 'confirmed'].includes(a.status)) return '';
+  if (!mg.canCancel && !mg.canReschedule) return mg.message ? `<div class="card"><p class="muted">${esc(mg.message)}</p></div>` : '';
+  const rule = mg.cutoffHours ? `You can change or cancel online up to ${mg.cutoffHours} hours before your appointment.` : 'You can change or cancel online any time before your appointment.';
+  const policy = `<p class="muted">${rule}${mg.policy ? ` ${esc(mg.policy)}` : ''}</p>`;
+  if (!mg.verified) {
+    return `<div class="card"><h2>Change or cancel</h2>${policy}
+      <form id="verify-form"><label for="last4">To continue, enter the last 4 digits of the phone number you booked with</label>
+        <input id="last4" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="off">
+        <div class="err" id="err-verify" role="alert"></div><button type="submit" class="ghost">Continue</button></form></div>`;
+  }
+  return `<div class="card"><h2>Change or cancel</h2>${policy}
+    ${mg.canReschedule ? '' : `<p class="muted">${esc(mg.message)}</p>`}
+    <div class="pay-buttons">
+      ${mg.canReschedule ? '<button type="button" class="ghost" id="move-btn">Move to another time</button>' : ''}
+      ${mg.canCancel ? '<button type="button" class="danger" id="cancel-btn">Cancel booking</button>' : ''}
+    </div>
+    <div class="err" id="err-manage" role="alert"></div>
+    <div id="move-panel" class="hide">
+      <label for="move-date">New date</label><input id="move-date" type="date" min="${esc(today)}">
+      <div id="move-slots" class="chips"></div><div class="muted" id="move-msg">Choose a date to see free times.</div>
+    </div></div>`;
+}
+function wireManage(d, code) {
+  const a = d.appointment, base = `${API}/appointments/${encodeURIComponent(code)}`;
+  const vf = $('verify-form');
+  if (vf) vf.onsubmit = async (e) => {
+    e.preventDefault(); $('err-verify').textContent = '';
+    try {
+      const r = await call('POST', `${base}/manage-token`, { phoneLast4: $('last4').value });
+      history.replaceState(null, '', `${location.pathname}?code=${encodeURIComponent(code)}&t=${encodeURIComponent(r.token)}`);
+      showStatus(code);
+    } catch (x) { $('err-verify').textContent = x.message; }
+  };
+  const cb = $('cancel-btn');
+  if (cb) cb.onclick = async () => {
+    const paid = a.status !== 'pending_payment' && a.payMethod !== 'cash';
+    if (!confirm(`Cancel your ${a.service} appointment?${paid ? ' Deposits aren’t refunded automatically; the salon will decide about yours.' : ''}`)) return;
+    cb.disabled = true; $('err-manage').textContent = '';
+    try { await call('POST', `${base}/cancel`, { t: manageT() }); showStatus(code); }
+    catch (x) { $('err-manage').textContent = x.message; cb.disabled = false; }
+  };
+  const mb = $('move-btn');
+  if (mb) mb.onclick = () => { $('move-panel').classList.toggle('hide'); $('move-date').focus(); };
+  const md = $('move-date');
+  if (md) md.onchange = async () => {
+    $('move-slots').innerHTML = ''; $('move-msg').textContent = 'Checking availability…';
+    try {
+      const r = await call('GET', `${base}/slots?date=${md.value}&t=${encodeURIComponent(manageT())}`);
+      $('move-msg').textContent = r.closed ? `The salon is closed that day${r.closed.note ? ` (${r.closed.note})` : ''}.`
+        : r.slots.length ? 'Tap a time to move your appointment there.' : 'No free times that day. Please try another date.';
+      $('move-slots').innerHTML = r.slots.map((t) => `<button type="button" class="chip" data-t="${t}">${fmtTime(t)}</button>`).join('');
+    } catch (x) { $('move-msg').textContent = x.message; }
+  };
+  const ms = $('move-slots');
+  if (ms) ms.onclick = async (e) => {
+    const b = e.target.closest('.chip'); if (!b) return;
+    if (!confirm(`Move your appointment to ${fmtDate(md.value)} at ${fmtTime(b.dataset.t)}?`)) return;
+    $('err-manage').textContent = ''; b.disabled = true;
+    try { await call('POST', `${base}/reschedule`, { t: manageT(), date: md.value, time: b.dataset.t }); showStatus(code); }
+    catch (x) { $('err-manage').textContent = x.message; b.disabled = false; if (/taken/i.test(x.message)) md.onchange(); }
+  };
 }
 
 // ---------- boot ----------

@@ -87,6 +87,11 @@ for (const [col, def] of [
 // Client emails on/off, and how many hours before an appointment the reminder goes out (0 = no reminder).
 if (!salonCols.includes('client_emails')) db.exec('ALTER TABLE salons ADD COLUMN client_emails INTEGER NOT NULL DEFAULT 1');
 if (!salonCols.includes('reminder_hours')) db.exec('ALTER TABLE salons ADD COLUMN reminder_hours INTEGER NOT NULL DEFAULT 24');
+// Clients cancelling or moving their own booking: on/off, how close to the start they still can, and the
+// salon's own policy text (e.g. about deposits) shown to them.
+if (!salonCols.includes('client_changes')) db.exec('ALTER TABLE salons ADD COLUMN client_changes INTEGER NOT NULL DEFAULT 1');
+if (!salonCols.includes('change_cutoff_hours')) db.exec('ALTER TABLE salons ADD COLUMN change_cutoff_hours INTEGER NOT NULL DEFAULT 24');
+if (!salonCols.includes('cancel_policy')) db.exec("ALTER TABLE salons ADD COLUMN cancel_policy TEXT NOT NULL DEFAULT ''");
 // Suspended by a platform admin: booking page and owner logins stop working until lifted.
 if (!salonCols.includes('suspended_at')) db.exec('ALTER TABLE salons ADD COLUMN suspended_at TEXT');
 // Other payment options. PayPal can't take GYD, so PayPal deposits are charged in USD at usd_rate (GYD per 1 USD).
@@ -108,6 +113,8 @@ if (!apptCols.includes('paid_via')) db.exec("ALTER TABLE appointments ADD COLUMN
 // Emails to the client (only when they gave an address): confirmation, reminder, cancellation.
 if (!apptCols.includes('client_confirm_sent_at')) db.exec('ALTER TABLE appointments ADD COLUMN client_confirm_sent_at TEXT');
 if (!apptCols.includes('reminder_sent_at')) db.exec('ALTER TABLE appointments ADD COLUMN reminder_sent_at TEXT');
+if (!apptCols.includes('cancelled_by')) db.exec("ALTER TABLE appointments ADD COLUMN cancelled_by TEXT NOT NULL DEFAULT ''"); // '' | 'salon' | 'client'
+if (!apptCols.includes('reschedule_count')) db.exec('ALTER TABLE appointments ADD COLUMN reschedule_count INTEGER NOT NULL DEFAULT 0');
 // How the client chose to pay: 'mmg' (manual transfer) | 'mmg_checkout' | 'paypal_me' | 'paypal_checkout' | 'cash'
 if (!apptCols.includes('pay_method')) db.exec("ALTER TABLE appointments ADD COLUMN pay_method TEXT NOT NULL DEFAULT ''");
 

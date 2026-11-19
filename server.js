@@ -124,7 +124,7 @@ const depositFor = (salon, price) => {
 const closureOn = (salonId, date) =>
   db.prepare('SELECT * FROM closures WHERE salon_id = ? AND start_date <= ? AND end_date >= ? LIMIT 1').get(salonId, date, date);
 
-function slotsFor(salon, service, date) {
+function slotsFor(salon, service, date, excludeId = 0) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
   if (closureOn(salon.id, date)) return [];
   const dow = new Date(date + 'T00:00:00Z').getUTCDay();
@@ -134,9 +134,9 @@ function slotsFor(salon, service, date) {
   const now = nowLocal(salon.timezone);
   const booked = db.prepare(`
     SELECT start_local, end_local FROM appointments
-    WHERE salon_id = ? AND status IN ('pending_payment','payment_submitted','confirmed')
+    WHERE salon_id = ? AND id != ? AND status IN ('pending_payment','payment_submitted','confirmed')
       AND start_local < ? AND end_local > ?
-  `).all(salon.id, date + 'T23:59', date + 'T00:00');
+  `).all(salon.id, excludeId, date + 'T23:59', date + 'T00:00');
   const out = [];
   for (let t = open; t + service.duration_min <= close; t += salon.slot_step_min) {
     const start = `${date}T${fromMin(t)}`;
@@ -164,10 +164,45 @@ const apptOut = (a) => ({
   start: a.start_local, end: a.end_local, status: a.status,
   paymentRef: a.payment_ref, paymentSubmittedAt: a.payment_submitted_at, createdAt: a.created_at,
   synced: Boolean(a.google_event_id), paidVia: a.paid_via, payMethod: a.pay_method,
+  cancelledBy: a.cancelled_by, rescheduleCount: a.reschedule_count,
 });
 
 // The client's own booking page (status, payment), used in their emails.
-const clientLink = (salon, a) => `${BASE_URL}/s/${encodeURIComponent(salon.slug)}?code=${encodeURIComponent(a.code)}`;
+const clientLink = (salon, a) => `${BASE_URL}/s/${encodeURIComponent(salon.slug)}?code=${encodeURIComponent(a.code)}&t=${manageToken(a)}`;
+
+// ---------- client self-service (cancel / reschedule) ----------
+// The booking code alone shows a booking; changing it needs this token too. It is in the client's email link and
+// handed to the browser that made the booking; anyone else proves it's theirs with the last 4 digits of the phone.
+const manageToken = (a) => crypto.createHmac('sha256', SECRET).update(`manage:${a.id}:${a.code}`).digest('base64url').slice(0, 22);
+const tokenOk = (a, t) => {
+  const want = manageToken(a), got = String(t || '');
+  return got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+};
+const MAX_RESCHEDULES = 3;
+// What the client may still do with this booking, and why not if they can't.
+function manageState(salon, a) {
+  if (!['pending_payment', 'payment_submitted', 'confirmed'].includes(a.status)) return { canCancel: false, canReschedule: false, reason: 'inactive' };
+  if (!salon.client_changes) return { canCancel: false, canReschedule: false, reason: 'off' };
+  const now = nowLocal(salon.timezone);
+  if (a.start_local <= now) return { canCancel: false, canReschedule: false, reason: 'past' };
+  const beforeCutoff = addMinutes(now, salon.change_cutoff_hours * 60) <= a.start_local;
+  const underLimit = a.reschedule_count < MAX_RESCHEDULES;
+  return {
+    canCancel: beforeCutoff || a.status === 'pending_payment', // an unpaid hold can always be let go
+    canReschedule: beforeCutoff && underLimit,
+    reason: !beforeCutoff ? 'cutoff' : !underLimit ? 'limit' : '',
+  };
+}
+function manageRefusal(salon, reason) {
+  const contact = salon.phone ? ` Please contact the salon: ${salon.phone}.` : ' Please contact the salon.';
+  return {
+    cutoff: `Changes can only be made online up to ${salon.change_cutoff_hours} hours before the appointment.${contact}`,
+    limit: `This booking has already been moved ${MAX_RESCHEDULES} times.${contact}`,
+    off: `This salon doesn't take changes online.${contact}`,
+    past: 'This appointment has already started.',
+    inactive: 'This booking is no longer active.',
+  }[reason] || `This booking can't be changed online.${contact}`;
+}
 // "You're booked" email to the client, at most once per booking however it got confirmed.
 function sendClientConfirmation(salon, a) {
   if (!a.client_email) return;
@@ -342,7 +377,7 @@ app.post('/api/public/:slug/book', limit('book', 15, 3600e3), (req, res) => {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(code, salon.id, service.id, service.name, service.price, deposit, name, phone, email, str(b.notes, 300), start, addMinutes(start, service.duration_min)).lastInsertRowid;
   notify('booked', salon, db.prepare('SELECT * FROM appointments WHERE id = ?').get(id));
-  res.json({ code, deposit, holdMinutes: salon.hold_minutes, mmg: { number: salon.mmg_number, name: salon.mmg_name } });
+  res.json({ code, token: manageToken({ id, code }), deposit, holdMinutes: salon.hold_minutes, mmg: { number: salon.mmg_number, name: salon.mmg_name } });
 });
 
 app.get('/api/public/:slug/appointments/:code', (req, res) => {
@@ -359,9 +394,104 @@ app.get('/api/public/:slug/appointments/:code', (req, res) => {
     appointment: {
       code: a.code, service: a.service_name, start: a.start_local, end: a.end_local, deposit: a.deposit, price: a.price, status: a.status,
       clientName: a.client_name, payMethod: a.pay_method, depositUsd: salon.usd_rate > 0 ? paypal.usdFor(salon, a.deposit) : null,
+      cancelledBy: a.cancelled_by,
     },
     salon: publicSalon(salon),
+    manage: manageInfo(salon, a, req.query.t),
   });
+});
+
+function manageInfo(salon, a, t) {
+  const st = manageState(salon, a);
+  return {
+    ...st, verified: tokenOk(a, t), cutoffHours: salon.change_cutoff_hours, policy: salon.cancel_policy,
+    message: st.reason && st.reason !== 'inactive' ? manageRefusal(salon, st.reason) : '',
+  };
+}
+
+// A booking the client may act on: right code, and their manage token. Sends the error itself and returns null.
+function clientAppt(req, res, salon) {
+  expireStaleHolds();
+  const a = db.prepare('SELECT * FROM appointments WHERE code = ? AND salon_id = ?').get(str(req.params.code, 12).toUpperCase(), salon.id);
+  if (!a) { bad(res, 'Booking not found.', 404); return null; }
+  if (!tokenOk(a, req.body?.t ?? req.query.t)) { bad(res, 'Please confirm your phone number first.', 403); return null; }
+  return a;
+}
+
+// Someone with only the booking code proves it's theirs with the last 4 digits of the phone they booked with.
+app.post('/api/public/:slug/appointments/:code/manage-token', limit('manage', 20, 3600e3), (req, res) => {
+  const salon = openSalon(req, res);
+  if (!salon) return;
+  const a = db.prepare('SELECT * FROM appointments WHERE code = ? AND salon_id = ?').get(str(req.params.code, 12).toUpperCase(), salon.id);
+  if (!a) return bad(res, 'Booking not found.', 404);
+  const now = Date.now(), key = `managetry:${a.id}`;
+  const tries = (hits.get(key) || []).filter((t) => now - t < 3600e3);
+  if (tries.length >= 5) return bad(res, 'Too many attempts. Please wait an hour or contact the salon.', 429);
+  const digits = String(req.body?.phoneLast4 || '').replace(/\D/g, '');
+  if (digits.length !== 4 || !a.client_phone.replace(/\D/g, '').endsWith(digits)) {
+    tries.push(now); hits.set(key, tries);
+    return bad(res, 'Those digits don’t match the phone number on this booking.', 403);
+  }
+  res.json({ token: manageToken(a) });
+});
+
+// Free times for moving this booking (its own current slot counts as free).
+app.get('/api/public/:slug/appointments/:code/slots', (req, res) => {
+  const salon = openSalon(req, res);
+  if (!salon) return;
+  const a = clientAppt(req, res, salon);
+  if (!a) return;
+  const date = str(req.query.date, 10);
+  const closed = /^\d{4}-\d{2}-\d{2}$/.test(date) && closureOn(salon.id, date);
+  const slots = slotsFor(salon, { duration_min: durationOf(a) }, date, a.id).filter((t) => `${date}T${t}` !== a.start_local);
+  res.json({ slots, closed: closed ? { note: closed.note } : null });
+});
+const durationOf = (a) => Math.round((Date.parse(a.end_local + ':00Z') - Date.parse(a.start_local + ':00Z')) / 60000);
+
+app.post('/api/public/:slug/appointments/:code/reschedule', limit('resched', 20, 3600e3), async (req, res) => {
+  const salon = openSalon(req, res);
+  if (!salon) return;
+  const a = clientAppt(req, res, salon);
+  if (!a) return;
+  const st = manageState(salon, a);
+  if (!st.canReschedule) return bad(res, manageRefusal(salon, st.reason), 409);
+  const date = str(req.body?.date, 10), time = str(req.body?.time, 5);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return bad(res, 'Please pick a new date and time.');
+  if (closureOn(salon.id, date)) return bad(res, 'The salon is closed that day. Please pick another date.', 409);
+  const start = `${date}T${time}`;
+  if (start === a.start_local) return bad(res, 'That’s already your appointment time.');
+  // Synchronous check + update, so another booking can't take the slot in between.
+  if (!slotsFor(salon, { duration_min: durationOf(a) }, date, a.id).includes(time)) return bad(res, 'Sorry, that time was just taken. Please pick another.', 409);
+  const end = addMinutes(start, durationOf(a));
+  db.prepare('UPDATE appointments SET start_local = ?, end_local = ?, reschedule_count = reschedule_count + 1, reminder_sent_at = NULL WHERE id = ?')
+    .run(start, end, a.id);
+  const moved = db.prepare('SELECT * FROM appointments WHERE id = ?').get(a.id);
+  notify('client_rescheduled', salon, { ...moved, old_start: a.start_local });
+  notifyClient('rescheduled', salon, moved, { link: clientLink(salon, moved) });
+  if (a.status === 'confirmed' && a.google_event_id) {
+    // Move the calendar events: remove the old ones, then add new ones at the new time.
+    (async () => {
+      await google.removeEvents(salon, a);
+      db.prepare('UPDATE appointments SET google_event_id = NULL WHERE id = ?').run(a.id);
+      await google.syncConfirmed(salon, moved);
+    })().catch((e) => console.error('Google reschedule error', e.message));
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/public/:slug/appointments/:code/cancel', limit('ccancel', 20, 3600e3), async (req, res) => {
+  const salon = openSalon(req, res);
+  if (!salon) return;
+  const a = clientAppt(req, res, salon);
+  if (!a) return;
+  const st = manageState(salon, a);
+  if (!st.canCancel) return bad(res, manageRefusal(salon, st.reason), 409);
+  db.prepare(`UPDATE appointments SET status = 'cancelled', cancelled_by = 'client' WHERE id = ?`).run(a.id);
+  const c = { ...a, status: 'cancelled', cancelled_by: 'client' };
+  notify('client_cancelled', salon, c);
+  notifyClient('cancelled', salon, c);
+  if (a.google_event_id) google.removeEvents(salon, a).catch((e) => console.error('Google delete error', e.message));
+  res.json({ ok: true });
 });
 
 // The booking a payment action is for, if it can still take one. Sends the error itself and returns null.
@@ -583,6 +713,7 @@ admin.get('/me', (req, res) => {
     },
     notify: { emailAvailable: emailEnabled(), email: Boolean(owner.notify_email) },
     clientEmails: { enabled: Boolean(salon.client_emails), reminderHours: salon.reminder_hours },
+    clientChanges: { enabled: Boolean(salon.client_changes), cutoffHours: salon.change_cutoff_hours, policy: salon.cancel_policy },
   });
 });
 
@@ -673,6 +804,15 @@ admin.post('/closures', (req, res) => {
 });
 admin.delete('/closures/:id', (req, res) => {
   db.prepare('DELETE FROM closures WHERE id = ? AND salon_id = ?').run(Number(req.params.id), req.salon.id);
+  res.json({ ok: true });
+});
+
+// Whether clients can cancel/move their own bookings, how late, and the salon's policy text shown to them.
+admin.put('/client-changes', (req, res) => {
+  const hours = Number(req.body?.cutoffHours);
+  if (![0, 2, 12, 24, 48, 72].includes(hours)) return bad(res, 'Choose how late clients can make changes.');
+  db.prepare('UPDATE salons SET client_changes = ?, change_cutoff_hours = ?, cancel_policy = ? WHERE id = ?')
+    .run(req.body?.enabled ? 1 : 0, hours, str(req.body?.policy, 300), req.salon.id);
   res.json({ ok: true });
 });
 
@@ -806,8 +946,8 @@ admin.post('/appointments/:id/cancel', async (req, res) => {
   const a = ownAppt(req);
   if (!a) return bad(res, 'Appointment not found.', 404);
   if (['cancelled', 'expired'].includes(a.status)) return res.json({ ok: true });
-  db.prepare(`UPDATE appointments SET status = 'cancelled' WHERE id = ?`).run(a.id);
-  notifyClient('cancelled', req.salon, a);
+  db.prepare(`UPDATE appointments SET status = 'cancelled', cancelled_by = 'salon' WHERE id = ?`).run(a.id);
+  notifyClient('cancelled', req.salon, { ...a, cancelled_by: 'salon' });
   await google.removeEvents(req.salon, a);
   res.json({ ok: true });
 });
