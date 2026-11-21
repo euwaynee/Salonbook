@@ -109,12 +109,23 @@ header.top :focus-visible { outline-color: var(--color-accent-ink); }
 .auth-panel > div { width: 100%; max-width: 26rem; margin-inline: auto; }
 .auth-panel form button[type="submit"] { width: 100%; min-height: 48px; margin-top: var(--space-xs); }
 .auth-panel input { min-height: 48px; }
+/* standalone links (forgot password, back to sign in, legal) get a finger-sized tap area */
+.auth-panel p.muted a, .legal-links a { display: inline-block; padding-block: var(--space-sm); }
+.wordmark { display: inline-flex; align-items: center; min-height: 44px; }
 
 @media (max-width: 60rem) {
   .auth .container { grid-template-columns: minmax(0, 1fr); min-height: 0; }
   .auth-field { padding: var(--space-lg) 0 var(--space-2xl); gap: var(--space-xl); }
   .auth-field::before { inset: 0 -100vmax; }
   .auth-panel { padding: var(--space-xl) 0 var(--space-2xl); }
+}
+@media (max-width: 40rem) {
+  /* phones: a shorter plum field so the sign-in button is on screen without scrolling */
+  .auth-field { padding: var(--space-sm) 0 var(--space-xl); gap: var(--space-md); }
+  .auth-field h1 { font-size: var(--text-display-s); }
+  .auth-field .lead { margin-top: var(--space-sm); font-size: var(--text-md); line-height: 1.5; }
+  .auth-panel { padding: var(--space-lg) 0 var(--space-xl); }
+  .auth-panel .tabs { margin-bottom: var(--space-sm); }
 }
 
 /* ---------- /s/:slug : the booking flow ---------- */
