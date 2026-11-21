@@ -122,6 +122,7 @@ header.top :focus-visible { outline-color: var(--color-accent-ink); }
 #flow:not(.hide) { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: var(--space-2xl); align-items: start; }
 .flow-side { position: sticky; top: var(--space-lg); }
 #salon-info { white-space: pre-line; margin-bottom: var(--space-lg); }
+#closed-days { margin-bottom: var(--space-lg); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-input); background: var(--color-warn-bg); color: var(--color-ink-2); }
 .steps { display: grid; gap: var(--space-2xs); margin: 0; padding: 0; list-style: none; counter-reset: none; }
 .steps span { display: block; padding: var(--space-xs) 0 var(--space-xs) var(--space-sm); border-left: 2px solid var(--color-rule); color: var(--color-muted); font-size: var(--text-sm); }
 .steps span.on { border-color: var(--color-accent); color: var(--color-ink); font-weight: 600; }
@@ -160,6 +161,7 @@ header.top :focus-visible { outline-color: var(--color-accent-ink); }
 #status details, #status .pay-cash { border-top: 1px solid var(--color-rule); padding-top: var(--space-sm); }
 #status details summary { cursor: pointer; font-weight: 600; color: var(--color-accent); min-height: 44px; display: flex; align-items: center; }
 #status .pay-cash > * + * { margin-top: var(--space-xs); }
+#status .pay-cash button, #status .pay .btn { width: 100%; min-height: 48px; }
 .ticket { display: grid; gap: var(--space-2xs); }
 .ticket .code { margin-left: var(--space-2xs); }
 
@@ -174,6 +176,14 @@ header.top :focus-visible { outline-color: var(--color-accent-ink); }
   .flow-side { position: static; }
   .steps { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
   .steps span { border-left: 0; border-top: 2px solid var(--color-rule); padding: var(--space-xs) 0 0; }
+}
+@media (max-width: 40rem) {
+  .book-main { padding-block: var(--space-lg) var(--space-2xl); }
+  /* three time columns on a phone instead of two: half the scrolling */
+  .chips { grid-template-columns: repeat(auto-fill, minmax(5.75rem, 1fr)); }
+  .chip { padding: 0 var(--space-xs); }
+  /* less nested padding so payment details get the width */
+  #status .card, .pay { padding: var(--space-md); }
 }
 
 /* ---------- /admin.html : the dashboard ---------- */
