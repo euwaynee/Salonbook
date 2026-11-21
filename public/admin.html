@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=20261121b">
 </head>
 <body class="app">
 <header class="top"><div class="wrap">
@@ -209,7 +209,7 @@
         <p class="muted">Give clients more choices alongside MMG. PayPal can’t take Guyanese dollars, so PayPal deposits are charged in US dollars at your rate.</p>
       </header>
       <div>
-        <label class="check"><input type="checkbox" id="p-cash"> Let clients pay cash at the salon instead <span class="muted">(no deposit; you confirm each booking)</span></label>
+        <label class="check"><input type="checkbox" id="p-cash"> <span>Let clients pay cash at the salon instead <span class="muted">(no deposit; you confirm each booking)</span></span></label>
         <div class="row">
           <div><label for="p-rate">US dollar rate <span class="muted">(GYD for 1 USD, e.g. 210)</span></label><input id="p-rate" type="number" min="0" step="any"></div>
           <div><label for="p-me">PayPal.me name <span class="muted">(paypal.me/yourname)</span></label><input id="p-me" maxlength="40" autocomplete="off" placeholder="yourname"></div>
@@ -631,7 +631,7 @@ $('mmg-form').onsubmit = async (e) => {
 function renderNotify() {
   const n = ME.notify, box = $('notify-box');
   if (!n.emailAvailable) { box.innerHTML = 'Email is not set up on this server yet. The server admin needs to add SMTP settings to .env (see README).'; return; }
-  box.innerHTML = `<label class="check"><input type="checkbox" id="n-email" ${n.email ? 'checked' : ''}> Email me at <b>${esc(ME.owner.email)}</b></label>
+  box.innerHTML = `<label class="check"><input type="checkbox" id="n-email" ${n.email ? 'checked' : ''}> <span>Email me at <b>${esc(ME.owner.email)}</b></span></label>
     <button type="button" class="ghost small" id="n-test">Send test email</button> <span id="n-msg" class="ok-msg"></span><div class="err" id="err-n"></div>`;
   $('n-email').onchange = async (e) => {
     $('err-n').textContent = '';

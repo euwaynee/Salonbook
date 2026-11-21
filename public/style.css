@@ -5,8 +5,8 @@
 /* Hallmark · dismissed 23 · header.top and .auth-field are the declared committed surface: the brand bar is each salon’s own colour, set by applyBrand, and the plum field on / is the posture named in the stamp */
 /* Hallmark · answered F15 · one container per page: .container on /, .wrap at 1120px on the two app screens */
 /* Hallmark · dismissed 58 · the hero sentence is the owner’s own 26 words, kept as found in a full redesign */
-@import url("./tokens.css");
-@import url("./base.css");
+@import url("./tokens.css?v=20261121b");
+@import url("./base.css?v=20261121b");
 
 /* ---------- shared ---------- */
 body { line-height: 1.55; }
@@ -219,6 +219,12 @@ summary.muted { cursor: pointer; padding-block: var(--space-sm); }
 .logo-row img { width: 56px; height: 56px; object-fit: cover; border-radius: var(--radius-input); border: 1px solid var(--color-rule); }
 .f-color { flex: 0 0 120px; }
 
+/* settings: room around sub-headings and helper text; checkbox text stays one block */
+.set p:has(> b:only-child) { margin-top: var(--space-lg); }
+.set .row + p.muted, .set textarea + p { margin-top: var(--space-xs); }
+label.check > span { min-width: 0; overflow-wrap: anywhere; }
+.row > div:has(> select) { flex-basis: 11rem; }
+
 .hours-row { display: grid; grid-template-columns: 3.5rem minmax(0, 1fr) minmax(0, 1fr) 5rem; gap: var(--space-xs); align-items: center; padding-block: var(--space-2xs); }
 .hours-row label { margin: 0; font-weight: 400; display: flex; align-items: center; gap: var(--space-xs); min-height: 44px; }
 
@@ -240,6 +246,16 @@ table.svcs .c-act button + button { margin-left: var(--space-2xs); }
 }
 @media (max-width: 40rem) {
   .appt { grid-template-columns: minmax(0, 1fr); }
+  /* phones: time on one line, full-width tap-sized actions, primary action on its own row */
+  .appt .time { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-xs); }
+  .appt .time .muted { display: inline; margin-top: 0; }
+  .appt .actions > * { flex: 1 1 auto; min-height: 44px; }
+  .appt .actions > button:not(.danger) { flex-basis: 100%; }
+  .link-bar .row > input { flex-basis: 100%; }
+  .link-bar .row > button, .link-bar .row > .btn { flex: 1 1 0; }
+  .toolbar { flex-wrap: wrap; }
+  .toolbar select { flex: 1 1 15rem; max-width: none; }
+  .toolbar > button { flex: 1 1 auto; }
   /* Short tables become stacked cards; the wide stats table keeps its headers and scrolls in its own box. */
   table.svcs:not(.wide) thead { display: none; }
   table.svcs:not(.wide) tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-xs); padding-block: var(--space-sm); border-bottom: 1px solid var(--color-rule); }
