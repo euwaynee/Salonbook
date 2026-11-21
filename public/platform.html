@@ -38,6 +38,23 @@
   table.svcs td small { display: block; color: var(--color-muted); }
   .section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-xs); }
   .section-head h2 { margin: 0; }
+  /* Server details: an even grid so labels line up instead of wrapping ragged. */
+  .server-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 9rem), 1fr)); gap: var(--space-sm) var(--space-md); }
+  .server-facts + p { margin-top: var(--space-md); }
+  .server-facts dd { overflow-wrap: anywhere; }
+
+  /* Phones: each salon becomes a labelled card instead of a 1,000px-wide table. */
+  @media (max-width: 40rem) {
+    .table-scroll { overflow: visible; }
+    table.svcs.wide { min-width: 0; border-top: 1px solid var(--color-rule); }
+    table.svcs.wide, table.svcs.wide tbody { display: block; }
+    table.svcs.wide thead { display: none; }
+    table.svcs.wide tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-sm) var(--space-md); padding-block: var(--space-md); border-bottom: 1px solid var(--color-rule); }
+    table.svcs.wide td { display: block; padding: 0; border: 0; text-align: left; overflow-wrap: anywhere; }
+    table.svcs.wide td.full { grid-column: 1 / -1; }
+    table.svcs.wide td[data-label]::before { content: attr(data-label); display: block; font-size: var(--text-xs); color: var(--color-muted); }
+    table.svcs.wide td small { margin-top: var(--space-3xs); }
+  }
 </style>
 </head>
 <body class="app">
@@ -145,17 +162,17 @@ async function load() {
   const backupAge = sys.lastBackup ? (Date.now() - Date.parse(sys.lastBackup)) / 36e5 : null;
   const statusBadges = Object.keys(STATUS).map((k) => `<span class="badge b-${k}">${STATUS[k]}: ${n(d.byStatus[k])}</span>`).join('');
   const salonRows = d.salons.map((s) => `<tr>
-      <td><b>${esc(s.name)}</b> ${stateBadge(s)}<small><a href="${esc(s.url)}" target="_blank" rel="noopener">/s/${esc(s.slug)}</a></small></td>
-      <td>${esc(s.owners || '—')}<small>${s.google ? `Google Calendar: ${s.google} connected` : 'No Google Calendar'}</small></td>
-      <td>${day(s.createdAt)}</td>
-      <td class="r">${n(s.services)}</td>
-      <td class="r">${n(s.bookings30)}</td>
-      <td class="r">${n(s.bookings)}</td>
-      <td class="r">${n(s.confirmed)}${s.awaitingOwner ? `<small>${n(s.awaitingOwner)} to check</small>` : ''}</td>
-      <td class="r">${money(s.deposits)}</td>
-      <td>${day(s.lastBooking)}</td>
-      <td>${payCell(s)}</td>
-      <td>${s.mine ? '<span class="muted">Your salon</span>' : `<button type="button" class="small ${s.suspendedAt ? 'ghost' : 'danger'}" data-suspend="${s.id}" data-on="${s.suspendedAt ? '' : '1'}" data-name="${esc(s.name)}">${s.suspendedAt ? 'Restore' : 'Suspend'}</button>`}</td>
+      <td class="full"><b>${esc(s.name)}</b> ${stateBadge(s)}<small><a href="${esc(s.url)}" target="_blank" rel="noopener">/s/${esc(s.slug)}</a></small></td>
+      <td class="full" data-label="Owners">${esc(s.owners || '—')}<small>${s.google ? `Google Calendar: ${s.google} connected` : 'No Google Calendar'}</small></td>
+      <td data-label="Joined">${day(s.createdAt)}</td>
+      <td class="r" data-label="Services">${n(s.services)}</td>
+      <td class="r" data-label="Bookings, 30 days">${n(s.bookings30)}</td>
+      <td class="r" data-label="All bookings">${n(s.bookings)}</td>
+      <td class="r" data-label="Confirmed">${n(s.confirmed)}${s.awaitingOwner ? `<small>${n(s.awaitingOwner)} to check</small>` : ''}</td>
+      <td class="r" data-label="Deposits">${money(s.deposits)}</td>
+      <td data-label="Last booking">${day(s.lastBooking)}</td>
+      <td class="full" data-label="Payment options">${payCell(s)}</td>
+      <td class="full">${s.mine ? '<span class="muted">Your salon</span>' : `<button type="button" class="small ${s.suspendedAt ? 'ghost' : 'danger'}" data-suspend="${s.id}" data-on="${s.suspendedAt ? '' : '1'}" data-name="${esc(s.name)}">${s.suspendedAt ? 'Restore' : 'Suspend'}</button>`}</td>
     </tr>`).join('');
 
   $('main').innerHTML = `
@@ -188,7 +205,7 @@ async function load() {
 
     <section>
       <h2>Server</h2>
-      <dl class="facts">
+      <dl class="facts server-facts">
         <div><dt>Address</dt><dd>${esc(sys.baseUrl)}</dd></div>
         <div><dt>Running for</dt><dd>${uptime(sys.uptimeSec)}</dd></div>
         <div><dt>Database size</dt><dd>${(sys.dbBytes / 1048576).toFixed(1)} MB</dd></div>
